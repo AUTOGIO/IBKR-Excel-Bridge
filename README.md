@@ -109,6 +109,9 @@ SUCCESS: /path/to/IBKR-Excel-Bridge/output/IBKR_Portfolio.xlsx
 
 Logs are appended to `logs/ibkr_excel_bridge.log`.
 
+**How to work day-to-day** (buy an ETF → snapshot → reconcile → fiscal follow-up):
+see [`docs/OPERATING_GUIDE.md`](docs/OPERATING_GUIDE.md).
+
 ## Workbook contents
 
 Machine-owned sheets (rewritten every run):
