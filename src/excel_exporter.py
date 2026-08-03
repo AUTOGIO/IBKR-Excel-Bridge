@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from openpyxl import Workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
@@ -26,6 +26,7 @@ _MONEY_COLUMNS: frozenset[str] = frozenset(
         "market_value",
         "unrealized_pnl",
         "realized_pnl",
+        "value_numeric",
     }
 )
 
@@ -38,14 +39,77 @@ _QUANTITY_FORMAT: str = "#,##0.####"
 
 
 class ExcelExporter:
+    # Sheets this exporter owns. Any other sheets found in an existing
+    # workbook (e.g. user-authored notes or reports) are preserved on
+    # rewrite.
+    OWNED_SHEETS: tuple[str, ...] = (
+        "Overview",
+        "Account Summary",
+        "Cash By Currency",
+        "Positions",
+        "Portfolio",
+        "API Messages",
+    )
+
     def __init__(self, output_path: Path) -> None:
         self.output_path = Path(output_path)
+
+    def _load_or_create_workbook(self) -> Workbook:
+        """Open an existing workbook (preserving foreign sheets) or create
+        a fresh one. Owned sheets are cleared so the exporter can rewrite
+        them without accumulating stale data.
+
+        Sheet order in the returned workbook is:
+        - all foreign sheets first (in their original order)
+        - then the owned sheets in canonical order, appended by ``export()``.
+
+        This keeps user-authored tabs (e.g. a manual audit report) at the
+        top of the tab bar where a human would put them.
+        """
+        if not self.output_path.exists():
+            workbook = Workbook()
+            active = workbook.active
+            if active is not None and active.title in {"Sheet", "Sheet1"}:
+                # We'll create "Overview" ourselves below; drop the default.
+                workbook.remove(active)
+            workbook.create_sheet("Overview")
+            return workbook
+
+        try:
+            workbook = load_workbook(self.output_path)
+        except Exception:  # noqa: BLE001 - corrupt file: fall back to fresh
+            workbook = Workbook()
+            default = workbook.active
+            if default is not None:
+                workbook.remove(default)
+            workbook.create_sheet("Overview")
+            return workbook
+
+        # Delete owned sheets so we can rewrite them cleanly. Any foreign
+        # sheets are left untouched in their existing positions.
+        for name in list(workbook.sheetnames):
+            if name in self.OWNED_SHEETS:
+                del workbook[name]
+
+        # Overview must exist before ``_write_overview`` fetches it.
+        workbook.create_sheet("Overview")
+        return workbook
 
     # -- helpers --
 
     @staticmethod
     def _humanize(column_name: str) -> str:
-        # Normalize acronyms so titles read naturally.
+        # Explicit overrides for readability.
+        exact = {
+            "value_numeric": "Value (Numeric)",
+            "error_time_local": "Error Time (Local)",
+            "error_time": "Error Time (ms)",
+            "instrument_kind": "Kind",
+            "security_type": "SecType",
+            "primary_exchange": "Primary Exchange",
+        }
+        if column_name in exact:
+            return exact[column_name]
         replacements = {
             "Pnl": "P&L",
             "Id": "ID",
@@ -179,9 +243,12 @@ class ExcelExporter:
         workbook: Workbook,
         data: dict[str, list[dict[str, Any]]],
     ) -> None:
-        overview = workbook.active
-        assert overview is not None
-        overview.title = "Overview"
+        # Overview is guaranteed to exist and be first (see
+        # _load_or_create_workbook). Fetch it directly to avoid depending on
+        # ``wb.active`` when the workbook has foreign sheets ahead of it.
+        overview = workbook["Overview"]
+        # Clear any prior content in case we reused a loaded workbook.
+        overview.delete_rows(1, overview.max_row)
 
         generated_at = datetime.now().astimezone()
         errors = data.get("errors", [])
@@ -224,7 +291,7 @@ class ExcelExporter:
     def export(self, data: dict[str, list[dict[str, Any]]]) -> Path:
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
 
-        workbook = Workbook()
+        workbook = self._load_or_create_workbook()
         self._write_overview(workbook, data)
 
         self._write_records(
@@ -232,7 +299,14 @@ class ExcelExporter:
             "Account Summary",
             data.get("account_summary", []),
             "AccountSummaryTable",
-            preferred_order=("account", "tag", "value", "currency", "request_id"),
+            preferred_order=(
+                "account",
+                "tag",
+                "value",
+                "value_numeric",
+                "currency",
+                "request_id",
+            ),
         )
 
         self._write_records(
@@ -240,7 +314,13 @@ class ExcelExporter:
             "Cash By Currency",
             data.get("account_values", []),
             "AccountValuesTable",
-            preferred_order=("account", "key", "currency", "value"),
+            preferred_order=(
+                "account",
+                "currency",
+                "metric",
+                "value_numeric",
+                "value",
+            ),
         )
 
         self._write_records(
@@ -251,6 +331,7 @@ class ExcelExporter:
             preferred_order=(
                 "account",
                 "symbol",
+                "instrument_kind",
                 "security_type",
                 "currency",
                 "exchange",
@@ -269,6 +350,7 @@ class ExcelExporter:
             preferred_order=(
                 "account",
                 "symbol",
+                "instrument_kind",
                 "security_type",
                 "currency",
                 "exchange",
@@ -291,6 +373,7 @@ class ExcelExporter:
                 "kind",
                 "code",
                 "message",
+                "error_time_local",
                 "request_id",
                 "error_time",
                 "advanced_rejection",

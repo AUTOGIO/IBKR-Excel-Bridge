@@ -11,6 +11,7 @@ import inspect
 import logging
 import threading
 from dataclasses import asdict, dataclass
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -25,21 +26,68 @@ LOGGER = logging.getLogger(__name__)
 # --- Row types -------------------------------------------------------------
 
 
+def _try_float(value: Any) -> float | None:
+    """Coerce a stringy IBKR value to float if possible, else None.
+
+    IBKR account-summary/ledger values arrive as strings. We keep the raw
+    string in the row and expose the numeric version alongside so Excel can
+    sort/sum without lexicographic surprises.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return float(Decimal(text.replace(",", "")))
+    except (InvalidOperation, ValueError, TypeError):
+        return None
+
+
+# secType -> user-facing kind used in the Positions sheet.
+_SEC_TYPE_KIND: dict[str, str] = {
+    "STK": "Stock",
+    "CASH": "FX Cash",
+    "OPT": "Option",
+    "FUT": "Future",
+    "FOP": "Future Option",
+    "IND": "Index",
+    "BAG": "Combo",
+    "BOND": "Bond",
+    "WAR": "Warrant",
+    "FUND": "Fund",
+    "CRYPTO": "Crypto",
+    "CFD": "CFD",
+}
+
+
+def _instrument_kind(sec_type: str) -> str:
+    return _SEC_TYPE_KIND.get((sec_type or "").upper(), sec_type or "Unknown")
+
+
 @dataclass
 class AccountSummaryRow:
     request_id: int
     account: str
     tag: str
     value: str
+    value_numeric: float | None
     currency: str
 
 
 @dataclass
 class AccountValueRow:
+    """Raw $LEDGER-* per-currency account values (one metric per row).
+
+    Populated for every ``$LEDGER-*`` key emitted by IBKR when the currency
+    is not ``BASE``. The ``metric`` field is the key with the ``$LEDGER-``
+    prefix stripped for readability.
+    """
     account: str
-    key: str
-    value: str
+    metric: str
     currency: str
+    value: str
+    value_numeric: float | None
 
 
 @dataclass
@@ -47,6 +95,7 @@ class PositionRow:
     account: str
     symbol: str
     security_type: str
+    instrument_kind: str
     currency: str
     exchange: str
     primary_exchange: str
@@ -60,6 +109,7 @@ class PortfolioRow:
     account: str
     symbol: str
     security_type: str
+    instrument_kind: str
     currency: str
     exchange: str
     contract_id: int
@@ -78,6 +128,7 @@ class ErrorRow:
     message: str
     advanced_rejection: str = ""
     error_time: int | None = None
+    error_time_local: str = ""  # human-readable ISO timestamp
     kind: str = "warning"  # "info", "warning", "error"
 
 
@@ -128,8 +179,25 @@ ACCOUNT_SUMMARY_TAGS: str = ",".join(
 
 
 # Per-account-value keys we surface in the "Cash By Currency" sheet.
-CASH_VALUE_KEYS: frozenset[str] = frozenset(
-    {"CashBalance", "TotalCashBalance", "RealizedPnL", "UnrealizedPnL"}
+#
+# IBKR emits per-currency ledger data under the ``$LEDGER-`` prefix (as
+# discovered by the diagnostic dump). The plain ``CashBalance`` key is only
+# emitted with segment suffixes (``-C``/``-S``/``-P``) in the base currency,
+# so filtering on that key alone yields nothing for multi-currency accounts.
+LEDGER_PREFIX: str = "$LEDGER-"
+# Metrics (post-prefix names) we forward to the Cash By Currency sheet.
+LEDGER_METRICS: frozenset[str] = frozenset(
+    {
+        "CashBalance",
+        "TotalCashBalance",
+        "NetLiquidationByCurrency",
+        "ExchangeRate",
+        "AccruedCash",
+        "RealizedPnL",
+        "UnrealizedPnL",
+        "StockMarketValue",
+        "FxCashBalance",
+    }
 )
 
 
@@ -164,6 +232,7 @@ class IBKRClient(EWrapper, EClient):
         self._account_summary: dict[
             tuple[str, str, str], AccountSummaryRow
         ] = {}
+        # Keyed on (account, metric, currency) — one row per ledger metric.
         self._account_values: dict[
             tuple[str, str, str], AccountValueRow
         ] = {}
@@ -293,16 +362,30 @@ class IBKRClient(EWrapper, EClient):
 
     def _snapshot(self) -> dict[str, list[dict[str, Any]]]:
         with self._lock:
+            # Stable, deterministic ordering across runs. Users expect the
+            # same row order on repeated snapshots so diffs stay meaningful.
+            summary_rows = sorted(
+                self._account_summary.values(),
+                key=lambda r: (r.account, r.tag, r.currency or ""),
+            )
+            value_rows = sorted(
+                self._account_values.values(),
+                key=lambda r: (r.account, r.currency, r.metric),
+            )
+            position_rows = sorted(
+                self._positions.values(),
+                key=lambda r: (r.account, r.security_type, r.symbol),
+            )
+            portfolio_rows = sorted(
+                self._portfolio.values(),
+                key=lambda r: (r.account, r.security_type, r.symbol),
+            )
             return {
                 "accounts": [{"account": a} for a in self.managed_account_ids],
-                "account_summary": [
-                    asdict(r) for r in self._account_summary.values()
-                ],
-                "account_values": [
-                    asdict(r) for r in self._account_values.values()
-                ],
-                "positions": [asdict(r) for r in self._positions.values()],
-                "portfolio": [asdict(r) for r in self._portfolio.values()],
+                "account_summary": [asdict(r) for r in summary_rows],
+                "account_values": [asdict(r) for r in value_rows],
+                "positions": [asdict(r) for r in position_rows],
+                "portfolio": [asdict(r) for r in portfolio_rows],
                 "errors": [asdict(r) for r in self.errors],
             }
 
@@ -338,6 +421,7 @@ class IBKRClient(EWrapper, EClient):
                     account=account,
                     tag=tag,
                     value=value,
+                    value_numeric=_try_float(value),
                     currency=currency,
                 )
             )
@@ -353,18 +437,25 @@ class IBKRClient(EWrapper, EClient):
         currency: str,
         accountName: str,  # noqa: N803
     ) -> None:
-        # Only surface currency-bearing cash/PnL rows; skip base-currency
-        # aggregates that duplicate the Account Summary sheet.
-        if key not in CASH_VALUE_KEYS:
+        # IBKR routes per-currency ledger data through keys of the form
+        # ``$LEDGER-<metric>`` with a real ISO currency. Plain ``CashBalance``
+        # is only emitted with segment suffixes in the base currency.
+        if not key.startswith(LEDGER_PREFIX):
             return
-        if not currency or currency in {"", "BASE"}:
+        metric = key[len(LEDGER_PREFIX):]
+        if metric not in LEDGER_METRICS:
+            return
+        if not currency or currency == "BASE":
             return
         with self._lock:
-            self._account_values[(accountName, key, currency)] = AccountValueRow(
-                account=accountName,
-                key=key,
-                value=val,
-                currency=currency,
+            self._account_values[(accountName, metric, currency)] = (
+                AccountValueRow(
+                    account=accountName,
+                    metric=metric,
+                    currency=currency,
+                    value=val,
+                    value_numeric=_try_float(val),
+                )
             )
 
     def position(
@@ -380,6 +471,7 @@ class IBKRClient(EWrapper, EClient):
                 account=account,
                 symbol=contract.symbol,
                 security_type=contract.secType,
+                instrument_kind=_instrument_kind(contract.secType),
                 currency=contract.currency,
                 exchange=contract.exchange or "",
                 primary_exchange=contract.primaryExchange or "",
@@ -407,6 +499,7 @@ class IBKRClient(EWrapper, EClient):
             account=accountName,
             symbol=contract.symbol,
             security_type=contract.secType,
+            instrument_kind=_instrument_kind(contract.secType),
             currency=contract.currency,
             exchange=contract.exchange or "",
             contract_id=contract.conId,
@@ -470,12 +563,26 @@ class IBKRClient(EWrapper, EClient):
         if 100 <= code < 500:
             kind = "error"
 
+        # Derive a human-readable timestamp from IBKR's epoch-millis time.
+        # ibapi returns 0 for legacy code paths and a full ms epoch otherwise.
+        error_time_local = ""
+        if isinstance(error_time, int) and error_time > 0:
+            try:
+                error_time_local = (
+                    datetime.fromtimestamp(error_time / 1000.0)
+                    .astimezone()
+                    .isoformat(timespec="milliseconds")
+                )
+            except (OverflowError, OSError, ValueError):
+                error_time_local = ""
+
         entry = ErrorRow(
             request_id=reqId,
             code=code,
             message=str(error_string) if error_string is not None else "",
             advanced_rejection=str(advanced) if advanced else "",
             error_time=error_time,
+            error_time_local=error_time_local,
             kind=kind,
         )
         with self._lock:

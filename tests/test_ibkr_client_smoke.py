@@ -166,21 +166,36 @@ def test_portfolio_distinct_accounts_and_contracts_kept_separate() -> None:
     assert len(snapshot["portfolio"]) == 3
 
 
-def test_update_account_value_filters_keys_and_base_currency() -> None:
+def test_update_account_value_uses_ledger_prefix() -> None:
+    """Real IBKR feed uses ``$LEDGER-<metric>`` keys for per-currency data.
+    Plain ``CashBalance`` never carries a non-BASE currency, so the filter
+    must key on the ``$LEDGER-`` prefix."""
     mod = _load_client_module(with_error_time=True)
     client = mod.IBKRClient()
 
+    # $LEDGER-* with real currency: keep.
+    client.updateAccountValue("$LEDGER-CashBalance", "38000.00", "EUR", "DU1")
+    client.updateAccountValue("$LEDGER-TotalCashBalance", "38000.00", "EUR", "DU1")
+    client.updateAccountValue("$LEDGER-CashBalance", "159347.20", "USD", "DU1")
+    client.updateAccountValue("$LEDGER-ExchangeRate", "1.1508", "EUR", "DU1")
+    # $LEDGER-* with BASE: drop.
+    client.updateAccountValue("$LEDGER-CashBalance", "203081.02", "BASE", "DU1")
+    # Non-$LEDGER key: drop (base-currency aggregates duplicate Account Summary).
     client.updateAccountValue("CashBalance", "12345.67", "USD", "DU1")
-    client.updateAccountValue("CashBalance", "2000.00", "EUR", "DU1")
-    client.updateAccountValue("CashBalance", "500.00", "BASE", "DU1")
-    client.updateAccountValue("NetLiquidation", "50000", "USD", "DU1")
+    # $LEDGER-* metric not in our whitelist: drop.
+    client.updateAccountValue("$LEDGER-Cryptocurrency", "0.00", "EUR", "DU1")
 
-    snapshot = client._snapshot()
-    keys = [(r["key"], r["currency"]) for r in snapshot["account_values"]]
-    assert ("CashBalance", "USD") in keys
-    assert ("CashBalance", "EUR") in keys
-    assert ("CashBalance", "BASE") not in keys
-    assert not any(k == "NetLiquidation" for k, _ in keys)
+    snap = client._snapshot()
+    triples = {(r["currency"], r["metric"], r["value"]) for r in snap["account_values"]}
+    assert ("EUR", "CashBalance", "38000.00") in triples
+    assert ("EUR", "TotalCashBalance", "38000.00") in triples
+    assert ("USD", "CashBalance", "159347.20") in triples
+    assert ("EUR", "ExchangeRate", "1.1508") in triples
+    assert not any(currency == "BASE" for currency, *_ in triples)
+    assert not any(metric == "Cryptocurrency" for _, metric, _ in triples)
+    # Every kept row must have a parseable numeric value.
+    for r in snap["account_values"]:
+        assert r["value_numeric"] is not None
 
 
 def test_error_new_signature_parses_code_and_message() -> None:
@@ -273,8 +288,8 @@ def test_account_values_dedupe_dual_dispatch() -> None:
     client = mod.IBKRClient()
 
     for _ in range(2):
-        client.updateAccountValue("CashBalance", "12345.67", "EUR", "DU1")
-        client.updateAccountValue("CashBalance", "9876.54", "USD", "DU1")
+        client.updateAccountValue("$LEDGER-CashBalance", "12345.67", "EUR", "DU1")
+        client.updateAccountValue("$LEDGER-CashBalance", "9876.54", "USD", "DU1")
 
     snap = client._snapshot()
     assert len(snap["account_values"]) == 2
@@ -282,11 +297,79 @@ def test_account_values_dedupe_dual_dispatch() -> None:
     assert pairs == {("EUR", "12345.67"), ("USD", "9876.54")}
 
 
+def test_account_summary_carries_numeric_and_text_value() -> None:
+    """Both the raw string and a coerced float should be stored so Excel can
+    sort and sum the numeric column without lexicographic surprises."""
+    mod = _load_client_module(with_error_time=True)
+    client = mod.IBKRClient()
+
+    client.accountSummary(9001, "DU1", "NetLiquidation", "202588.97", "USD")
+    client.accountSummary(9001, "DU1", "AccountType", "INDIVIDUAL", "")
+    client.accountSummary(9001, "DU1", "Cushion", "0.973595", "")
+
+    snap = {r["tag"]: r for r in client._snapshot()["account_summary"]}
+    assert snap["NetLiquidation"]["value"] == "202588.97"
+    assert snap["NetLiquidation"]["value_numeric"] == 202588.97
+    assert snap["Cushion"]["value_numeric"] == 0.973595
+    # Non-numeric tags: keep the string, but value_numeric is None.
+    assert snap["AccountType"]["value"] == "INDIVIDUAL"
+    assert snap["AccountType"]["value_numeric"] is None
+
+
+def test_position_and_portfolio_carry_instrument_kind() -> None:
+    mod = _load_client_module(with_error_time=True)
+    client = mod.IBKRClient()
+
+    stk = _fake_contract(265598, "AAPL")
+    fx = _fake_contract(12087792, "EUR")
+    fx.secType = "CASH"
+
+    client.position("DU1", stk, Decimal("10"), 305.17)
+    client.position("DU1", fx, Decimal("40000"), 1.15)
+    client.updatePortfolio(stk, Decimal("10"), 305.0, 3050.0, 305.17, -1.7, 0.0, "DU1")
+
+    snap = client._snapshot()
+    kinds = {r["symbol"]: r["instrument_kind"] for r in snap["positions"]}
+    assert kinds == {"AAPL": "Stock", "EUR": "FX Cash"}
+    portfolio_kinds = {r["symbol"]: r["instrument_kind"] for r in snap["portfolio"]}
+    assert portfolio_kinds == {"AAPL": "Stock"}
+
+
+def test_error_row_carries_local_timestamp() -> None:
+    mod = _load_client_module(with_error_time=True)
+    client = mod.IBKRClient()
+
+    client.error(-1, 1785785588057, 2104, "Market data farm connection is OK")
+
+    row = client._snapshot()["errors"][0]
+    assert row["error_time"] == 1785785588057
+    # Local timestamp should be an ISO-8601 string, non-empty, and start with a year.
+    assert row["error_time_local"]
+    assert row["error_time_local"][:4].isdigit()
+
+
+def test_snapshot_is_stably_sorted() -> None:
+    """Two identical insertion orders reversed should still emit the same
+    output ordering after the sort in _snapshot()."""
+    mod = _load_client_module(with_error_time=True)
+    a = mod.IBKRClient()
+    b = mod.IBKRClient()
+
+    for client, order in ((a, ("MSFT", "AAPL", "GOOG")), (b, ("GOOG", "AAPL", "MSFT"))):
+        for i, sym in enumerate(order):
+            c = _fake_contract(i + 1, sym)
+            client.position("DU1", c, Decimal("1"), 1.0)
+
+    syms_a = [r["symbol"] for r in a._snapshot()["positions"]]
+    syms_b = [r["symbol"] for r in b._snapshot()["positions"]]
+    assert syms_a == syms_b == sorted(syms_a)
+
+
 def _run_all() -> int:
     tests = [
         test_portfolio_upserts_on_repeated_updates,
         test_portfolio_distinct_accounts_and_contracts_kept_separate,
-        test_update_account_value_filters_keys_and_base_currency,
+        test_update_account_value_uses_ledger_prefix,
         test_error_new_signature_parses_code_and_message,
         test_error_legacy_signature_parses_code_and_message,
         test_error_classifies_client_errors_as_error_kind,
@@ -294,6 +377,10 @@ def _run_all() -> int:
         test_account_summary_dedupes_dual_dispatch,
         test_positions_dedupe_dual_dispatch,
         test_account_values_dedupe_dual_dispatch,
+        test_account_summary_carries_numeric_and_text_value,
+        test_position_and_portfolio_carry_instrument_kind,
+        test_error_row_carries_local_timestamp,
+        test_snapshot_is_stably_sorted,
     ]
     failures = 0
     for test in tests:

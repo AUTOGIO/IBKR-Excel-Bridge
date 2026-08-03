@@ -112,11 +112,11 @@ Logs are appended to `logs/ibkr_excel_bridge.log`.
 | Worksheet          | Contents                                                             |
 | ------------------ | -------------------------------------------------------------------- |
 | `Overview`         | Generation time, counts, and API message breakdown                   |
-| `Account Summary`  | NetLiq, cash, buying power, P&L, margin (base currency)              |
-| `Cash By Currency` | `CashBalance` / `TotalCashBalance` / `RealizedPnL` / `UnrealizedPnL` per currency |
-| `Positions`        | Symbol, quantity, average cost, currency, conId                      |
-| `Portfolio`        | Market price, market value, unrealized/realized P&L per position     |
-| `API Messages`     | Info, warnings, and errors from the TWS API session                  |
+| `Account Summary`  | NetLiq, cash, buying power, P&L, margin (base currency). `Value` is the IBKR-native string; `Value (Numeric)` is a coerced `float` for sorting and formulas. |
+| `Cash By Currency` | Per-currency ledger: cash balance, net-liq contribution, FX rate, accrued cash, P&L. Sourced from IBKR's `$LEDGER-*` account values. |
+| `Positions`        | Symbol, `Kind` (Stock / FX Cash / Option / ...), quantity, average cost, currency, conId |
+| `Portfolio`        | Market price, market value, unrealized/realized P&L per position. Excludes `CASH` secType (see limitations). |
+| `API Messages`     | Info, warnings, and errors from the TWS API session, with a human-readable `Error Time (Local)` column |
 
 ## Validation checklist
 
@@ -153,6 +153,22 @@ withholding taxes, historical ledger ingestion via Flex Query).
   slightly between the workbook and the TWS Portfolio window.
 - `AccruedCash`, `Cushion`, and `EquityWithLoanValue` are not populated for
   every account type; empty values are expected in that case.
+- **`Positions` can have more rows than `Portfolio`.** This is IBKR-defined
+  behavior:
+  - `reqPositions()` includes FX cash-conversion positions with
+    `secType=CASH`. When you convert USD into EUR (or any non-base currency)
+    inside TWS, that FX balance appears as a `CASH` position in `Positions`.
+  - `reqAccountUpdates()` (which feeds `Portfolio`) does **not** re-emit those
+    cash positions — the balance is already reflected in `TotalCashValue` and
+    `$LEDGER-CashBalance`.
+  - Do not reconcile the two sheets row-for-row. Reconcile by `Contract ID`
+    within `Kind = Stock/Option/Future/...`, and expect `Positions` to be a
+    superset when `Kind = FX Cash` rows exist.
+- **`Positions.quantity` for an FX cash conversion is the gross conversion
+  amount, not the settled balance.** For example, if you converted USD into
+  40,000 EUR today and IBKR runs T+2 settlement, `Positions` shows `40,000`
+  while `Cash By Currency > CashBalance` shows the settled figure (often
+  lower). The two agree once settlement completes.
 - **Average cost between `Positions` and `Portfolio` sheets can differ by a
   small amount for the same instrument.** This is IBKR-defined behavior:
   - The `Positions` sheet's `Average Cost` comes from `reqPositions()`, which
@@ -162,6 +178,23 @@ withholding taxes, historical ledger ingestion via Flex Query).
     `(execution_price × qty + commissions) / qty`.
   - The delta multiplied by quantity equals your round-trip commission for
     that position. For example, `(87.7979933 - 87.7828476) × 70 ≈ $1.06`.
+
+### `Cash By Currency` sheet — how it's populated
+
+IBKR routes per-currency ledger data through `updateAccountValue` callbacks
+with keys of the form `$LEDGER-<metric>` and a real ISO currency code
+(never `BASE`). The collector filters on that prefix and forwards these
+metrics into the sheet:
+
+- `CashBalance`, `TotalCashBalance` — settled cash balance in that currency
+- `NetLiquidationByCurrency` — total value contributed by that currency
+- `ExchangeRate` — IBKR's mark-to-base rate at snapshot time
+- `AccruedCash`, `RealizedPnL`, `UnrealizedPnL` — currency-scoped
+- `StockMarketValue`, `FxCashBalance` — for context
+
+Plain `CashBalance` (without the `$LEDGER-` prefix) is deliberately dropped
+because IBKR only ever emits it with segment suffixes (`-C`/`-S`/`-P`) in
+the base currency, which duplicates `Account Summary` data.
 
 ## Troubleshooting
 
