@@ -51,6 +51,8 @@ OWNED_SHEETS_STANDALONE: tuple[str, ...] = (
 
 OWNED_SHEETS_TAX: tuple[str, ...] = OWNED_SHEETS_STANDALONE + (
     "IBKR_Reconciliacao",
+    "IBKR_Eventos_Staging",
+    "IBKR_Posicao_From_Events",
 )
 
 LEGACY_OWNED_SHEETS: tuple[str, ...] = (
@@ -103,12 +105,14 @@ class ExcelExporter:
         *,
         mode: str = "standalone",
         qty_tolerance: float = 0.0001,
+        events_file: Path | None = None,
     ) -> None:
         if mode not in {"standalone", "tax_workbook"}:
             raise ValueError(f"Unknown exporter mode: {mode!r}")
         self.output_path = Path(output_path)
         self.mode = mode
         self.qty_tolerance = float(qty_tolerance)
+        self.events_file = Path(events_file) if events_file else None
         self.owned_sheets: tuple[str, ...] = (
             OWNED_SHEETS_TAX if mode == "tax_workbook" else OWNED_SHEETS_STANDALONE
         )
@@ -482,9 +486,70 @@ class ExcelExporter:
 
         if self.mode == "tax_workbook":
             self._write_reconciliation(workbook, data)
+            self._write_event_sheets(workbook)
 
         workbook.save(self.output_path)
         return self.output_path
+
+    def _write_event_sheets(self, workbook: Workbook) -> None:
+        from events_store import load_events
+        from promote_events import derive_positions_from_events
+
+        events: list[dict[str, Any]] = []
+        if self.events_file and self.events_file.exists():
+            events = load_events(self.events_file)
+
+        staging_rows = [
+            {
+                "event_id": e.get("event_id"),
+                "date": e.get("date"),
+                "symbol": e.get("symbol"),
+                "tipo_evento": e.get("tipo_evento"),
+                "quantity": e.get("quantity"),
+                "price_usd": e.get("price_usd"),
+                "ir_retido_usd": e.get("ir_retido_usd"),
+                "ptax": e.get("ptax"),
+                "promoted": bool(e.get("promoted")),
+                "source_file": e.get("source_file"),
+                "observacoes": e.get("observacoes"),
+            }
+            for e in sorted(
+                events,
+                key=lambda x: (str(x.get("date", "")), str(x.get("symbol", ""))),
+            )
+        ]
+        self._write_records(
+            workbook,
+            "IBKR_Eventos_Staging",
+            staging_rows,
+            "IBKREventosStagingTable",
+            preferred_order=(
+                "event_id",
+                "date",
+                "symbol",
+                "tipo_evento",
+                "quantity",
+                "price_usd",
+                "ir_retido_usd",
+                "ptax",
+                "promoted",
+                "source_file",
+                "observacoes",
+            ),
+        )
+        self._write_records(
+            workbook,
+            "IBKR_Posicao_From_Events",
+            derive_positions_from_events(events),
+            "IBKRPosicaoFromEventsTable",
+            preferred_order=(
+                "symbol",
+                "quantity",
+                "avg_cost_usd",
+                "avg_cost_brl",
+                "status",
+            ),
+        )
 
 
 __all__ = [

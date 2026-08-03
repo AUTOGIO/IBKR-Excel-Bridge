@@ -11,6 +11,10 @@ logs/*
 output/*
 !output/.gitkeep
 
+data/statements/*
+!data/statements/.gitkeep
+data/events.jsonl
+
 config/settings.local.json
 
 .DS_Store

@@ -1,0 +1,3 @@
+Symbol,Date/Time,Quantity,TradePrice,Buy/Sell,IBCommission,TradeID,CurrencyPrimary
+BIL,20260801;093000,100,91.55,BUY,-1.0,TRD001,USD
+AAPL,20260802;100000,-5,210.25,SELL,-1.0,TRD002,USD

@@ -27,8 +27,10 @@ and writes it into structured `IBKR_*` Excel sheets.
 - Order placement (no `placeOrder` code exists).
 - Continuous streaming or scheduled runs.
 - SQLite, Power Query, dashboards.
-- Historical trades / dividends / withholding taxes — those belong in a
-  separate Flex Query ingestion module.
+- Historical trades / dividends via **Flex Web Service auto-download** (CSV
+  drop + promote is implemented; Flex HTTP client is stubbed).
+- Auto-overwrite of `MyProfit_2026` (derived sheet only).
+- Live BCB PTAX fetch.
 
 ## Project layout
 
@@ -96,6 +98,8 @@ auto-detects either signature, but 10.19+ is recommended.
 
 ## Running
 
+### Live snapshot (Phase 1)
+
 ```bash
 ./scripts/run.zsh
 ```
@@ -107,9 +111,24 @@ responds) and then runs `python src/main.py`. On success you should see:
 SUCCESS: /path/to/IBKR-Excel-Bridge/output/IBKR_Portfolio.xlsx
 ```
 
+or the tax workbook path when `excel.output_mode` is `tax_workbook`.
+
+### Statement ingest (Phase 3)
+
+```bash
+# 1. Drop IBKR Activity/Flex CSV files into data/statements/
+./scripts/ingest.zsh
+
+# 2. Review IBKR_Eventos_Staging, then append to Registro_Real
+./scripts/promote_events.zsh
+```
+
+Flex Web Service auto-download is stubbed (`flex.enabled: false`). See
+[`docs/OPERATING_GUIDE.md`](docs/OPERATING_GUIDE.md).
+
 Logs are appended to `logs/ibkr_excel_bridge.log`.
 
-**How to work day-to-day** (buy an ETF → snapshot → reconcile → fiscal follow-up):
+**How to work day-to-day** (buy an ETF → CSV → promote → snapshot → reconcile):
 see [`docs/OPERATING_GUIDE.md`](docs/OPERATING_GUIDE.md).
 
 ## Workbook contents
@@ -125,6 +144,8 @@ Machine-owned sheets (rewritten every run):
 | `IBKR_Portfolio` | Market price, market value, unrealized/realized P&L per position. Excludes `CASH` secType (see limitations). |
 | `IBKR_API_Messages` | Info, warnings, and errors from the API session, with a human-readable `Error Time (Local)` column |
 | `IBKR_Reconciliacao` | **Tax mode only.** Qty diff vs `MyProfit_2026` / `Posicoes_Atuais` (`OK` / `DIVERGE` / `ONLY_IBKR` / `ONLY_FISCAL`). |
+| `IBKR_Eventos_Staging` | **Tax mode.** Parsed statement events awaiting / after promote. |
+| `IBKR_Posicao_From_Events` | **Tax mode.** Derived qty/cost from events (copy into MyProfit manually when trusted). |
 
 ## Tax workbook mode (Phase 1)
 

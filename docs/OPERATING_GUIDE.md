@@ -13,7 +13,7 @@ Buy / sell ETF     →      ./scripts/run.zsh     →      IBKR_* sheets
 ```
 
 **Phase 1 (built):** live snapshot + qty reconciliation.  
-**Phase 3 (not built yet):** Flex/statement → `Registro_Real`. Until then, new trades are entered in Excel (or left pending) using Activity Statements.
+**Phase 3 (built — CSV path):** drop Activity/Flex CSVs → `events.jsonl` → staging → promote into `Registro_Real`. Flex Web Service download is stubbed (`flex.enabled: false`).
 
 ---
 
@@ -37,21 +37,32 @@ Rules of thumb:
 
 ---
 
-## Daily loop (after Phase 1)
+## Daily loop (after Phase 1 + Phase 3)
 
 ```bash
 cd /Users/eduardofgiovannini/Documents/GitHub/IBKR-Excel-Bridge
 
-# 1. TWS or Gateway open, API on, correct account logged in
-# 2. Close the Excel target file
-# 3. Config: output_mode + expected_account as needed
+# A. After new trades/dividends — export Flex/Activity CSV from IBKR Client Portal
+#    and drop the file(s) into data/statements/
+
+./scripts/ingest.zsh
+#    → updates data/events.jsonl
+#    → refreshes IBKR_Eventos_Staging + IBKR_Posicao_From_Events
+
+# B. Review IBKR_Eventos_Staging in Excel (fill PTAX when ready)
+
+./scripts/promote_events.zsh
+#    → appends NEW rows only into Registro_Real (formulas copied)
+
+# C. Snapshot live positions + qty recon
+#    Close the workbook in Excel first
 
 ./scripts/run.zsh
 
-# 4. Open the workbook → IBKR_Reconciliacao
-# 5. Resolve ONLY_IBKR / DIVERGE / ONLY_FISCAL manually
-# 6. Use Excel simulators / Apuracao_Anual as before
+# D. Open workbook → IBKR_Reconciliacao / Registro_Real / Apuracao_Anual
 ```
+
+Optional later: set `"flex.enabled": true` plus token/query_id once Flex download is implemented; until then keep exporting CSVs manually.
 
 Logs: `logs/ibkr_excel_bridge.log`.  
 Tests after code changes: `./.venv/bin/python -m pytest tests -q`.
@@ -142,40 +153,49 @@ Typical statuses after buying BIL:
 
 Paper vs live tax account will show many `ONLY_FISCAL` / `ONLY_IBKR` rows — that is a **wrong-account** signal, not a BIL bug.
 
-### Step 5 — Manual fiscal update (still outside automation)
+### Step 5 — Ingest the Activity / Flex CSV (automated)
 
-Until Phase 3 exists, record the purchase yourself:
+1. In IBKR Client Portal, export an Activity Statement or Flex Query as **CSV**.
+2. Drop the file into `data/statements/` (any `*.csv` name).
+3. Close the tax workbook in Excel, then:
 
-1. Download IBKR **Activity Statement** (or Flex) for the trade day.
-2. In `Registro_Real`, add a **Compra** row: date, `BIL`, qty, USD price, PTAX on **settlement** date, etc. (follow existing row patterns / TOC).
-3. Refresh / update `MyProfit_2026` (or your cost source) so fiscal qty/cost for BIL matches reality.
-4. Re-run `./scripts/run.zsh` → `BIL` should move to `OK` on `IBKR_Reconciliacao`.
+```bash
+./scripts/ingest.zsh
+```
 
-### Step 6 — Last *product* tasks in the Excel model (not Python yet)
+4. Open `IBKR_Eventos_Staging` — confirm the Compra for BIL. Fill **PTAX** in staging or later in `Registro_Real` (blank PTAX is flagged by Excel validation).
+5. Promote into the fiscal ledger:
+
+```bash
+./scripts/promote_events.zsh
+```
+
+6. Optionally copy quantities/costs from `IBKR_Posicao_From_Events` into `MyProfit_2026` when you trust them (never auto-overwritten).
+
+### Step 6 — Re-snapshot and confirm recon
+
+```bash
+./scripts/run.zsh
+```
+
+`BIL` should move toward `OK` on `IBKR_Reconciliacao` once MyProfit qty matches live.
+
+### Step 7 — Excel apuração (product tasks)
 
 With the event and costs updated:
 
-1. `Posicoes_Atuais` — confirm BIL qty/cost (formulas pull from MyProfit today).
+1. `Posicoes_Atuais` — confirm BIL qty/cost.
 2. `Simulador_Vendas` / `Cenarios_Venda` — optional what-if sells.
 3. `Apuracao_Anual` — annual Lei 14.754 base / DARF estimate.
 4. `Auditoria_Dados` / `Relatorio_Final` — clear blockers before DIRPF.
 
-That is the end of the current operating path: **trade → snapshot → reconcile → manual ledger → Excel apuração**.
+End-to-end automated path now: **trade → CSV drop → ingest → review → promote → snapshot → recon**.
 
 ---
 
-## What this repo will add next (Phase 3)
+## What remains for Flex API
 
-When built, Step 5 becomes:
-
-```text
-Flex CSV / Activity Statement
-  → ingest → data/events.jsonl
-  → IBKR_Eventos_Staging (review)
-  → append to Registro_Real
-```
-
-Do not start Phase 3 until live `IBKR_Reconciliacao` is trustworthy on **U6658119**.
+When `src/flex_client.py` is fully implemented, Step 5 download becomes automatic (`flex.enabled` + token + query id). The CSV parser and promote path stay the same.
 
 ---
 

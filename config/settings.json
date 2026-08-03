@@ -10,10 +10,21 @@
     "expected_account": ""
   },
   "excel": {
-    "output_mode": "standalone",
+    "output_mode": "tax_workbook",
     "output_file": "output/IBKR_Portfolio.xlsx",
     "tax_workbook": "output/U6658119_TRIBUTACAO_WORKING.xlsx",
     "qty_tolerance": 0.0001
+  },
+  "ingest": {
+    "statements_dir": "data/statements",
+    "events_file": "data/events.jsonl",
+    "aliases_file": "config/symbol_aliases.json"
+  },
+  "flex": {
+    "enabled": false,
+    "token": "",
+    "query_id": "",
+    "base_url": "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
   },
   "logging": {
     "level": "INFO"

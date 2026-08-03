@@ -128,6 +128,8 @@ def main() -> int:
             output_path,
             mode=mode,
             qty_tolerance=qty_tolerance,
+            events_file=PROJECT_ROOT
+            / config.get("ingest", {}).get("events_file", "data/events.jsonl"),
         )
         created_file = exporter.export(data)
 
