@@ -1,0 +1,17 @@
+{
+  "ibkr": {
+    "host": "127.0.0.1",
+    "port": 7497,
+    "client_id": 21,
+    "connection_timeout_seconds": 15,
+    "collection_timeout_seconds": 30,
+    "require_read_only_confirmation": true,
+    "download_all_accounts": true
+  },
+  "excel": {
+    "output_file": "output/IBKR_Portfolio.xlsx"
+  },
+  "logging": {
+    "level": "INFO"
+  }
+}
