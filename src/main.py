@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Entry point: connect to TWS, collect a read-only snapshot, write Excel."""
+"""Entry point: connect to TWS/Gateway, collect a read-only snapshot, write Excel."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ import logging
 import socket
 import sys
 from pathlib import Path
+from typing import Any
 
 # Support being run as ``python src/main.py`` and as ``python -m src.main``.
 _HERE = Path(__file__).resolve().parent
@@ -52,6 +53,29 @@ def check_port_open(host: str, port: int, timeout: float = 2.0) -> bool:
         return False
 
 
+def resolve_output_path(excel_config: dict[str, Any], project_root: Path) -> Path:
+    mode = excel_config.get("output_mode", "standalone")
+    if mode == "tax_workbook":
+        rel = excel_config["tax_workbook"]
+    elif mode == "standalone":
+        rel = excel_config["output_file"]
+    else:
+        raise ValueError(f"Unknown excel.output_mode: {mode!r}")
+    return project_root / rel
+
+
+def assert_expected_account(data: dict[str, Any], expected: str) -> None:
+    expected = (expected or "").strip()
+    if not expected:
+        return
+    accounts = {row.get("account") for row in data.get("accounts", [])}
+    if expected not in accounts:
+        found = sorted(a for a in accounts if a)
+        raise ValueError(
+            f"expected_account {expected!r} not in managed accounts {found}"
+        )
+
+
 def main() -> int:
     config = load_config()
     configure_logging(config.get("logging", {}).get("level", "INFO"))
@@ -67,19 +91,22 @@ def main() -> int:
             logger.warning(
                 "'require_read_only_confirmation' is disabled in settings.json. "
                 "This flag is a client-side self-check only; enforce Read-Only "
-                "API in TWS Global Configuration -> API -> Settings."
+                "API in TWS/Gateway Global Configuration -> API -> Settings."
             )
 
         host = ibkr_config["host"]
         port = int(ibkr_config["port"])
         if not check_port_open(host, port):
             raise ConnectionError(
-                f"TWS API socket at {host}:{port} is not reachable. "
-                "Open TWS Paper Trading, verify 'Enable ActiveX and Socket "
-                "Clients' is on, and confirm the socket port matches."
+                f"IBKR API socket at {host}:{port} is not reachable. "
+                "Open TWS or IB Gateway, verify socket clients are enabled, "
+                "and confirm the port matches (TWS paper 7497 / live 7496; "
+                "Gateway paper 4002 / live 4001)."
             )
 
-        output_path = PROJECT_ROOT / excel_config["output_file"]
+        mode = excel_config.get("output_mode", "standalone")
+        output_path = resolve_output_path(excel_config, PROJECT_ROOT)
+        qty_tolerance = float(excel_config.get("qty_tolerance", 0.0001))
 
         client = IBKRClient()
         client.connect_and_start(
@@ -93,7 +120,15 @@ def main() -> int:
             timeout=int(ibkr_config["collection_timeout_seconds"])
         )
 
-        exporter = ExcelExporter(output_path)
+        assert_expected_account(
+            data, str(ibkr_config.get("expected_account", "") or "")
+        )
+
+        exporter = ExcelExporter(
+            output_path,
+            mode=mode,
+            qty_tolerance=qty_tolerance,
+        )
         created_file = exporter.export(data)
 
         logger.info("Excel workbook created: %s", created_file)

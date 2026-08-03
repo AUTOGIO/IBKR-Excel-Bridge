@@ -1,11 +1,13 @@
 # IBKR → Excel Bridge
 
 Read-only macOS pipeline that connects Python to Interactive Brokers via
-Trader Workstation (TWS), snapshots account and portfolio data, and writes it
-into a structured Excel workbook.
+Trader Workstation (TWS) or IB Gateway, snapshots account and portfolio data,
+and writes it into structured `IBKR_*` Excel sheets.
 
 - One command, one workbook, no order placement.
 - Paper account first. Never widen scope until reconciliation succeeds.
+- Optional **tax workbook** mode refreshes `IBKR_*` tabs inside a Lei 14.754
+  working copy and writes `IBKR_Reconciliacao` without touching fiscal sheets.
 
 ## What this MVP does
 
@@ -46,6 +48,7 @@ IBKR-Excel-Bridge/
 ├── src/
 │   ├── ibkr_client.py
 │   ├── excel_exporter.py
+│   ├── reconcile.py
 │   └── main.py
 └── tests/
 ```
@@ -59,18 +62,17 @@ IBKR-Excel-Bridge/
 
 ## TWS configuration
 
-In TWS Paper Trading, open `File → Global Configuration → API → Settings` and
-set:
+In TWS or IB Gateway, open API settings and set:
 
 - **Enable ActiveX and Socket Clients**: ON
-- **Socket port**: `7497`
+- **Socket port**: `7497` (TWS paper) or `4002` (Gateway paper)
 - **Read-Only API**: ON
 - **Allow connections from localhost only**: ON
 - **Master API client ID**: leave blank (or set and do not use `21`)
 
 Do not disable Read-Only API for this MVP. The `require_read_only_confirmation`
 flag in `config/settings.json` is a self-check only — the real enforcement lives
-in TWS.
+in TWS/Gateway.
 
 ## Setup
 
@@ -109,14 +111,53 @@ Logs are appended to `logs/ibkr_excel_bridge.log`.
 
 ## Workbook contents
 
-| Worksheet          | Contents                                                             |
-| ------------------ | -------------------------------------------------------------------- |
-| `Overview`         | Generation time, counts, and API message breakdown                   |
-| `Account Summary`  | NetLiq, cash, buying power, P&L, margin (base currency). `Value` is the IBKR-native string; `Value (Numeric)` is a coerced `float` for sorting and formulas. |
-| `Cash By Currency` | Per-currency ledger: cash balance, net-liq contribution, FX rate, accrued cash, P&L. Sourced from IBKR's `$LEDGER-*` account values. |
-| `Positions`        | Symbol, `Kind` (Stock / FX Cash / Option / ...), quantity, average cost, currency, conId |
-| `Portfolio`        | Market price, market value, unrealized/realized P&L per position. Excludes `CASH` secType (see limitations). |
-| `API Messages`     | Info, warnings, and errors from the TWS API session, with a human-readable `Error Time (Local)` column |
+Machine-owned sheets (rewritten every run):
+
+| Worksheet | Contents |
+| --- | --- |
+| `IBKR_Overview` | Generation time, mode, accounts, counts, API message breakdown |
+| `IBKR_Account_Summary` | NetLiq, cash, buying power, P&L, margin (base currency). `Value` is the IBKR-native string; `Value (Numeric)` is a coerced `float` for sorting and formulas. |
+| `IBKR_Cash_By_Currency` | Per-currency ledger: cash balance, net-liq contribution, FX rate, accrued cash, P&L. Sourced from IBKR's `$LEDGER-*` account values. |
+| `IBKR_Positions` | Symbol, `Kind` (Stock / FX Cash / Option / ...), quantity, average cost, currency, conId |
+| `IBKR_Portfolio` | Market price, market value, unrealized/realized P&L per position. Excludes `CASH` secType (see limitations). |
+| `IBKR_API_Messages` | Info, warnings, and errors from the API session, with a human-readable `Error Time (Local)` column |
+| `IBKR_Reconciliacao` | **Tax mode only.** Qty diff vs `MyProfit_2026` / `Posicoes_Atuais` (`OK` / `DIVERGE` / `ONLY_IBKR` / `ONLY_FISCAL`). |
+
+## Tax workbook mode (Phase 1)
+
+Use this to refresh live IBKR data **inside** a Lei 14.754 working copy without mutating fiscal sheets.
+
+1. Bootstrap the working file once:
+
+```bash
+cp "output/U6658119_TRIBUTACAO-LEI14754_v5-1-RECONCILIADO_2021-2026 copy.xlsx" \
+   output/U6658119_TRIBUTACAO_WORKING.xlsx
+```
+
+2. In `config/settings.json` set:
+
+```json
+"excel": {
+  "output_mode": "tax_workbook",
+  "tax_workbook": "output/U6658119_TRIBUTACAO_WORKING.xlsx",
+  "qty_tolerance": 0.0001
+}
+```
+
+Optionally set `"expected_account": "U6658119"` under `ibkr` so a paper login cannot silently write into the tax file.
+
+3. Prefer **IB Gateway** for API-only runs (lower resource use). Align `ibkr.port`:
+
+| App | Paper | Live |
+| --- | --- | --- |
+| TWS | 7497 | 7496 |
+| IB Gateway | 4002 | 4001 |
+
+4. Run `./scripts/run.zsh`, then open `IBKR_Reconciliacao` before trusting any qty differences.
+
+Default `output_mode` remains `standalone` (writes `output/IBKR_Portfolio.xlsx` only).
+
+Design notes: `docs/superpowers/specs/2026-08-03-tax-workbook-api-integration-design.md`.
 
 ## Validation checklist
 
@@ -198,9 +239,9 @@ the base currency, which duplicates `Account Summary` data.
 
 ## Troubleshooting
 
-- **`TWS API socket at 127.0.0.1:7497 is not reachable`** — TWS is not running,
+- **`IBKR API socket at … is not reachable`** — TWS/Gateway is not running,
   or API socket access is disabled, or the port in `settings.json` does not
-  match TWS.
+  match (TWS paper `7497` / Gateway paper `4002`).
 - **`Managed account request timed out`** — TWS accepted the connection but
   never returned `managedAccounts`. Usually caused by a stale connection; quit
   TWS fully and reopen it.

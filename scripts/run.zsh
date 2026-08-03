@@ -40,8 +40,9 @@ HOST="$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["ibkr"
 PORT="$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1]))["ibkr"]["port"])' "$CONFIG" 2>/dev/null || print -- "7497")"
 
 if ! /usr/bin/nc -z "$HOST" "$PORT" 2>/dev/null; then
-  print -u2 -- "ERROR: IBKR TWS API is not listening on $HOST:$PORT."
-  print -u2 -- "Open TWS Paper Trading and confirm API socket access is enabled."
+  print -u2 -- "ERROR: IBKR API is not listening on $HOST:$PORT."
+  print -u2 -- "Open TWS or IB Gateway and confirm socket clients are enabled."
+  print -u2 -- "Default ports: TWS paper 7497 / live 7496; Gateway paper 4002 / live 4001."
   exit 1
 fi
 

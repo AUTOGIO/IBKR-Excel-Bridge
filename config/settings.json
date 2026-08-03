@@ -6,10 +6,14 @@
     "connection_timeout_seconds": 15,
     "collection_timeout_seconds": 30,
     "require_read_only_confirmation": true,
-    "download_all_accounts": true
+    "download_all_accounts": true,
+    "expected_account": ""
   },
   "excel": {
-    "output_file": "output/IBKR_Portfolio.xlsx"
+    "output_mode": "standalone",
+    "output_file": "output/IBKR_Portfolio.xlsx",
+    "tax_workbook": "output/U6658119_TRIBUTACAO_WORKING.xlsx",
+    "qty_tolerance": 0.0001
   },
   "logging": {
     "level": "INFO"

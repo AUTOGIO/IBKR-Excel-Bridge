@@ -1,8 +1,7 @@
 """Excel workbook exporter for the IBKR read-only snapshot.
 
-Produces a workbook with tabs: Overview, Account Summary, Cash By Currency,
-Positions, Portfolio, and API Messages. Uses openpyxl tables and applies
-sensible number formats to currency/quantity columns.
+Produces machine-owned ``IBKR_*`` tabs. In ``tax_workbook`` mode, preserves
+all foreign Lei 14.754 sheets and adds ``IBKR_Reconciliacao``.
 """
 
 from __future__ import annotations
@@ -16,6 +15,8 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
+
+from reconcile import reconcile_quantities
 
 
 # Columns rendered with the "money" format (2 decimals, thousands separator).
@@ -32,74 +33,148 @@ _MONEY_COLUMNS: frozenset[str] = frozenset(
 
 # Columns rendered as quantities (up to 4 decimals to accommodate fractional
 # shares and FX lots).
-_QUANTITY_COLUMNS: frozenset[str] = frozenset({"quantity"})
+_QUANTITY_COLUMNS: frozenset[str] = frozenset(
+    {"quantity", "qty_ibkr", "qty_fiscal", "delta"}
+)
 
 _MONEY_FORMAT: str = "#,##0.00;[Red]-#,##0.00"
 _QUANTITY_FORMAT: str = "#,##0.####"
 
+OWNED_SHEETS_STANDALONE: tuple[str, ...] = (
+    "IBKR_Overview",
+    "IBKR_Account_Summary",
+    "IBKR_Cash_By_Currency",
+    "IBKR_Positions",
+    "IBKR_Portfolio",
+    "IBKR_API_Messages",
+)
+
+OWNED_SHEETS_TAX: tuple[str, ...] = OWNED_SHEETS_STANDALONE + (
+    "IBKR_Reconciliacao",
+)
+
+LEGACY_OWNED_SHEETS: tuple[str, ...] = (
+    "Overview",
+    "Account Summary",
+    "Cash By Currency",
+    "Positions",
+    "Portfolio",
+    "API Messages",
+)
+
+
+def extract_fiscal_quantities(workbook_path: Path) -> list[dict[str, Any]]:
+    """Read fiscal quantities from MyProfit_2026 or Posicoes_Atuais."""
+    wb = load_workbook(workbook_path, data_only=True, read_only=True)
+    try:
+        if "MyProfit_2026" in wb.sheetnames:
+            ws = wb["MyProfit_2026"]
+            rows: list[dict[str, Any]] = []
+            for row in ws.iter_rows(min_row=5, values_only=True):
+                if not row or len(row) < 3:
+                    continue
+                symbol, qty = row[1], row[2]
+                if symbol is None or str(symbol).strip() == "":
+                    continue
+                rows.append({"symbol": symbol, "quantity": qty})
+            return rows
+
+        if "Posicoes_Atuais" in wb.sheetnames:
+            ws = wb["Posicoes_Atuais"]
+            rows = []
+            for row in ws.iter_rows(min_row=5, values_only=True):
+                if not row or len(row) < 4:
+                    continue
+                symbol, qty = row[0], row[3]
+                if symbol is None or str(symbol).strip() == "":
+                    continue
+                rows.append({"symbol": symbol, "quantity": qty})
+            return rows
+
+        return []
+    finally:
+        wb.close()
+
 
 class ExcelExporter:
-    # Sheets this exporter owns. Any other sheets found in an existing
-    # workbook (e.g. user-authored notes or reports) are preserved on
-    # rewrite.
-    OWNED_SHEETS: tuple[str, ...] = (
-        "Overview",
-        "Account Summary",
-        "Cash By Currency",
-        "Positions",
-        "Portfolio",
-        "API Messages",
-    )
-
-    def __init__(self, output_path: Path) -> None:
+    def __init__(
+        self,
+        output_path: Path,
+        *,
+        mode: str = "standalone",
+        qty_tolerance: float = 0.0001,
+    ) -> None:
+        if mode not in {"standalone", "tax_workbook"}:
+            raise ValueError(f"Unknown exporter mode: {mode!r}")
         self.output_path = Path(output_path)
+        self.mode = mode
+        self.qty_tolerance = float(qty_tolerance)
+        self.owned_sheets: tuple[str, ...] = (
+            OWNED_SHEETS_TAX if mode == "tax_workbook" else OWNED_SHEETS_STANDALONE
+        )
+
+    def _assert_not_locked(self) -> None:
+        lock = self.output_path.parent / f"~${self.output_path.name}"
+        if lock.exists():
+            raise PermissionError(
+                f"Workbook appears open in Excel ({lock.name}). "
+                "Close Excel and retry."
+            )
 
     def _load_or_create_workbook(self) -> Workbook:
         """Open an existing workbook (preserving foreign sheets) or create
-        a fresh one. Owned sheets are cleared so the exporter can rewrite
-        them without accumulating stale data.
+        a fresh one in standalone mode.
 
         Sheet order in the returned workbook is:
         - all foreign sheets first (in their original order)
         - then the owned sheets in canonical order, appended by ``export()``.
-
-        This keeps user-authored tabs (e.g. a manual audit report) at the
-        top of the tab bar where a human would put them.
         """
-        if not self.output_path.exists():
+        overview_name = "IBKR_Overview"
+
+        if self.mode == "tax_workbook":
+            if not self.output_path.exists():
+                raise FileNotFoundError(
+                    f"Tax workbook not found: {self.output_path}. "
+                    "Copy the reconciled Lei 14.754 file to this path first."
+                )
+            self._assert_not_locked()
+            try:
+                workbook = load_workbook(self.output_path)
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(
+                    f"Tax workbook is unreadable or corrupt: {self.output_path}"
+                ) from exc
+        elif not self.output_path.exists():
             workbook = Workbook()
             active = workbook.active
             if active is not None and active.title in {"Sheet", "Sheet1"}:
-                # We'll create "Overview" ourselves below; drop the default.
                 workbook.remove(active)
-            workbook.create_sheet("Overview")
+            workbook.create_sheet(overview_name)
             return workbook
+        else:
+            self._assert_not_locked()
+            try:
+                workbook = load_workbook(self.output_path)
+            except Exception:  # noqa: BLE001 - corrupt file: fall back to fresh
+                workbook = Workbook()
+                default = workbook.active
+                if default is not None:
+                    workbook.remove(default)
+                workbook.create_sheet(overview_name)
+                return workbook
 
-        try:
-            workbook = load_workbook(self.output_path)
-        except Exception:  # noqa: BLE001 - corrupt file: fall back to fresh
-            workbook = Workbook()
-            default = workbook.active
-            if default is not None:
-                workbook.remove(default)
-            workbook.create_sheet("Overview")
-            return workbook
-
-        # Delete owned sheets so we can rewrite them cleanly. Any foreign
-        # sheets are left untouched in their existing positions.
+        delete_names = set(self.owned_sheets) | set(LEGACY_OWNED_SHEETS)
         for name in list(workbook.sheetnames):
-            if name in self.OWNED_SHEETS:
+            if name in delete_names:
                 del workbook[name]
 
-        # Overview must exist before ``_write_overview`` fetches it.
-        workbook.create_sheet("Overview")
+        workbook.create_sheet(overview_name)
         return workbook
 
     # -- helpers --
 
     @staticmethod
     def _humanize(column_name: str) -> str:
-        # Explicit overrides for readability.
         exact = {
             "value_numeric": "Value (Numeric)",
             "error_time_local": "Error Time (Local)",
@@ -107,6 +182,8 @@ class ExcelExporter:
             "instrument_kind": "Kind",
             "security_type": "SecType",
             "primary_exchange": "Primary Exchange",
+            "qty_ibkr": "Qty IBKR",
+            "qty_fiscal": "Qty Fiscal",
         }
         if column_name in exact:
             return exact[column_name]
@@ -145,8 +222,6 @@ class ExcelExporter:
 
     @staticmethod
     def _coerce_number(column: str, value: Any) -> Any:
-        # Force numeric columns into ``float`` even if they arrive as strings
-        # (which the IBKR API often does for account-value payloads).
         if column not in _MONEY_COLUMNS and column not in _QUANTITY_COLUMNS:
             return value
         if isinstance(value, (int, float)):
@@ -197,7 +272,6 @@ class ExcelExporter:
             worksheet.column_dimensions["A"].width = 40
             return
 
-        # Determine column order: preferred columns first, then any extras.
         seen_keys: set[str] = set()
         columns: list[str] = []
         if preferred_order:
@@ -227,9 +301,6 @@ class ExcelExporter:
                 self._apply_number_format(cell, column)
 
         worksheet.freeze_panes = "A2"
-        # ``auto_filter.ref`` is applied by the table below; setting it here
-        # can trigger openpyxl warnings about overlapping filters.
-
         self._make_table(
             worksheet=worksheet,
             table_name=table_name,
@@ -243,11 +314,7 @@ class ExcelExporter:
         workbook: Workbook,
         data: dict[str, list[dict[str, Any]]],
     ) -> None:
-        # Overview is guaranteed to exist and be first (see
-        # _load_or_create_workbook). Fetch it directly to avoid depending on
-        # ``wb.active`` when the workbook has foreign sheets ahead of it.
-        overview = workbook["Overview"]
-        # Clear any prior content in case we reused a loaded workbook.
+        overview = workbook["IBKR_Overview"]
         overview.delete_rows(1, overview.max_row)
 
         generated_at = datetime.now().astimezone()
@@ -258,11 +325,19 @@ class ExcelExporter:
                 error_kinds.get(row.get("kind", "warning"), 0) + 1
             )
 
+        accounts = [
+            str(row.get("account", "")).strip()
+            for row in data.get("accounts", [])
+            if row.get("account")
+        ]
+        account_label = ", ".join(accounts) if accounts else "(none)"
+
         overview_rows: list[tuple[str, Any]] = [
             ("IBKR Portfolio Workbook", ""),
             ("Generated", generated_at.isoformat(timespec="seconds")),
-            ("Connection mode", "Read-only (paper)"),
-            ("Accounts", len(data.get("accounts", []))),
+            ("Exporter mode", self.mode),
+            ("Connection mode", "Read-only"),
+            ("Accounts", account_label),
             ("Account summary rows", len(data.get("account_summary", []))),
             ("Cash / P&L per currency rows", len(data.get("account_values", []))),
             ("Positions", len(data.get("positions", []))),
@@ -286,6 +361,31 @@ class ExcelExporter:
         overview.column_dimensions["A"].width = 32
         overview.column_dimensions["B"].width = 42
 
+    def _write_reconciliation(
+        self,
+        workbook: Workbook,
+        data: dict[str, list[dict[str, Any]]],
+    ) -> None:
+        fiscal = extract_fiscal_quantities(self.output_path)
+        rows = reconcile_quantities(
+            live=data.get("positions", []),
+            fiscal=fiscal,
+            tolerance=self.qty_tolerance,
+        )
+        self._write_records(
+            workbook,
+            "IBKR_Reconciliacao",
+            rows,
+            "IBKRReconciliacaoTable",
+            preferred_order=(
+                "symbol",
+                "qty_ibkr",
+                "qty_fiscal",
+                "delta",
+                "status",
+            ),
+        )
+
     # -- public --
 
     def export(self, data: dict[str, list[dict[str, Any]]]) -> Path:
@@ -296,9 +396,9 @@ class ExcelExporter:
 
         self._write_records(
             workbook,
-            "Account Summary",
+            "IBKR_Account_Summary",
             data.get("account_summary", []),
-            "AccountSummaryTable",
+            "IBKRAccountSummaryTable",
             preferred_order=(
                 "account",
                 "tag",
@@ -311,9 +411,9 @@ class ExcelExporter:
 
         self._write_records(
             workbook,
-            "Cash By Currency",
+            "IBKR_Cash_By_Currency",
             data.get("account_values", []),
-            "AccountValuesTable",
+            "IBKRAccountValuesTable",
             preferred_order=(
                 "account",
                 "currency",
@@ -325,9 +425,9 @@ class ExcelExporter:
 
         self._write_records(
             workbook,
-            "Positions",
+            "IBKR_Positions",
             data.get("positions", []),
-            "PositionsTable",
+            "IBKRPositionsTable",
             preferred_order=(
                 "account",
                 "symbol",
@@ -344,9 +444,9 @@ class ExcelExporter:
 
         self._write_records(
             workbook,
-            "Portfolio",
+            "IBKR_Portfolio",
             data.get("portfolio", []),
-            "PortfolioTable",
+            "IBKRPortfolioTable",
             preferred_order=(
                 "account",
                 "symbol",
@@ -366,9 +466,9 @@ class ExcelExporter:
 
         self._write_records(
             workbook,
-            "API Messages",
+            "IBKR_API_Messages",
             data.get("errors", []),
-            "APIMessagesTable",
+            "IBKRAPIMessagesTable",
             preferred_order=(
                 "kind",
                 "code",
@@ -380,8 +480,17 @@ class ExcelExporter:
             ),
         )
 
+        if self.mode == "tax_workbook":
+            self._write_reconciliation(workbook, data)
+
         workbook.save(self.output_path)
         return self.output_path
 
 
-__all__ = ["ExcelExporter"]
+__all__ = [
+    "ExcelExporter",
+    "OWNED_SHEETS_STANDALONE",
+    "OWNED_SHEETS_TAX",
+    "LEGACY_OWNED_SHEETS",
+    "extract_fiscal_quantities",
+]
