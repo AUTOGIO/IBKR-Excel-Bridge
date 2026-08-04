@@ -90,6 +90,42 @@ def test_tax_mode_preserves_foreign_and_writes_recon(tmp_path: Path) -> None:
     assert "EUR" not in statuses
 
 
+def test_standalone_overview_has_refresh_control(tmp_path: Path) -> None:
+    out = tmp_path / "IBKR_Portfolio.xlsx"
+    ExcelExporter(out, mode="standalone").export(_sample_data())
+    overview = load_workbook(out)["IBKR_Overview"]
+    values = {
+        overview.cell(row=r, column=1).value: overview.cell(row=r, column=2).value
+        for r in range(1, overview.max_row + 1)
+        if overview.cell(row=r, column=1).value
+    }
+    assert "Update data" in values
+    # No repo scripts/ next to tmp_path → fallback label, not a hyperlink target.
+    assert values["Update data"] == "Run ./scripts/refresh_workbook.command"
+
+
+def test_overview_links_refresh_command_when_present(tmp_path: Path) -> None:
+    project = tmp_path / "proj"
+    scripts = project / "scripts"
+    scripts.mkdir(parents=True)
+    command = scripts / "refresh_workbook.command"
+    command.write_text("#!/bin/zsh\n", encoding="utf-8")
+    out = project / "data" / "output" / "IBKR_Portfolio.xlsx"
+    out.parent.mkdir(parents=True)
+
+    ExcelExporter(out, mode="standalone").export(_sample_data())
+    overview = load_workbook(out)["IBKR_Overview"]
+    action = None
+    for row in overview.iter_rows(min_row=1, max_col=2):
+        if row[0].value == "Update data":
+            action = row[1]
+            break
+    assert action is not None
+    assert action.value == "Refresh from TWS"
+    assert action.hyperlink is not None
+    assert action.hyperlink.target == command.resolve().as_uri()
+
+
 def test_tax_mode_missing_file_raises(tmp_path: Path) -> None:
     missing = tmp_path / "nope.xlsx"
     with pytest.raises(FileNotFoundError):

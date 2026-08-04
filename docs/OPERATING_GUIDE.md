@@ -64,12 +64,16 @@ cd /Users/eduardofgiovannini/Documents/GitHub/IBKR-Excel-Bridge
 #    → appends NEW rows only into Registro_Real (formulas copied)
 
 # C. Snapshot live positions + qty recon
-#    Close the workbook in Excel first
+#    Prefer the in-sheet control, or close the workbook first:
 
-./scripts/run.zsh
+./scripts/refresh_workbook.command
+#    → closes the target workbook in Excel, runs snapshot, reopens it
+#    Equivalent terminal path: ./scripts/run.zsh (workbook must be closed)
 
-# D. Open workbook → IBKR_Reconciliacao / Registro_Real / Apuracao_Anual
+# D. Open workbook → IBKR_Overview (Refresh from TWS) / IBKR_Reconciliacao / Registro_Real
 ```
+
+On `IBKR_Overview`, click the green **Refresh from TWS** cell to update all `IBKR_*` tabs. That launches `scripts/refresh_workbook.command`, which closes this file, snapshots TWS, and reopens it.
 
 Optional later: set `"flex.enabled": true` plus token/query_id once Flex download is implemented; until then keep exporting CSVs manually.
 

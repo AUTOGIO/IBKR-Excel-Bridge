@@ -61,9 +61,27 @@ _GUIDE_BODY_FONT: Font = Font(size=_BASE_FONT_SIZE, italic=True)
 _GUIDE_FILL: PatternFill = PatternFill(
     start_color="FFE8F1F8", end_color="FFE8F1F8", fill_type="solid"
 )
+_REFRESH_FILL: PatternFill = PatternFill(
+    start_color="FF1F7A4D", end_color="FF1F7A4D", fill_type="solid"
+)
+_REFRESH_FONT: Font = Font(size=_BASE_FONT_SIZE, bold=True, color="FFFFFFFF")
+_REFRESH_LABEL_FONT: Font = Font(size=_BASE_FONT_SIZE, bold=True)
 
 # Guide rows written above each data table: Description / How to read / Tip.
 _GUIDE_ROW_COUNT: int = 4  # 3 text rows + 1 blank spacer before the table header
+
+# Shared Positions ↔ Portfolio comparison shown on both tabs.
+_POSITIONS_VS_PORTFOLIO: str = (
+    "Positions vs Portfolio: Positions (reqPositions) is the full "
+    "holdings list — stocks, futures, options, and FX cash — with qty "
+    "and price-only average cost. Portfolio (updatePortfolio) is marked "
+    "securities only (no FX cash) with market price, market value, and "
+    "P&L; average cost is often commission-inclusive. Use Positions for "
+    "what you hold; Portfolio for valuation. Expect more Positions rows "
+    "when FX Cash exists. Match stocks/futures by Contract ID, not row "
+    "order. Settled FX cash truth is IBKR_Cash_By_Currency. Small MV/P&L "
+    "drift vs TWS is normal."
+)
 
 SHEET_GUIDES: dict[str, dict[str, str]] = {
     "IBKR_Overview": {
@@ -72,14 +90,15 @@ SHEET_GUIDES: dict[str, dict[str, str]] = {
             "account(s), exporter mode, and row counts per tab."
         ),
         "how_to_read": (
-            "Start here after every ./scripts/run.zsh. Confirm Generated "
-            "timestamp is recent, Accounts matches your TWS paper/live id, "
-            "and row counts look sane (Positions ≥ Portfolio when you hold FX)."
+            "Start here after every refresh. Confirm Generated timestamp is "
+            "recent, Accounts matches your TWS paper/live id, and row counts "
+            "look sane (Positions ≥ Portfolio when you hold FX)."
         ),
         "tip": (
-            "If row counts look wrong or Generated is stale, close Excel "
-            "(unlock the file) and re-run the collector. This tab has no "
-            "market prices — only metadata."
+            "Click Refresh from TWS (green control below), or run "
+            "./scripts/refresh_workbook.command. That closes this workbook, "
+            "snapshots TWS, and reopens the file. This tab has no market "
+            "prices — only metadata."
         ),
     },
     "IBKR_Account_Summary": {
@@ -118,22 +137,22 @@ SHEET_GUIDES: dict[str, dict[str, str]] = {
     "IBKR_Positions": {
         "description": (
             "Contract-level holdings from reqPositions, including stocks, "
-            "futures, options, and FX cash-conversion contracts."
+            "futures, options, and FX cash-conversion contracts. Sister tab: "
+            "IBKR_Portfolio (valuation / P&L, no FX cash)."
         ),
         "how_to_read": (
             "Use Kind to separate Stock / Future / FX Cash. Quantity is "
             "signed (negative = short). Average Cost here is the native "
-            "(price-only) average from IBKR positions."
+            "(price-only) average from IBKR positions — not the "
+            "commission-inclusive cost on IBKR_Portfolio."
         ),
-        "tip": (
-            "Expect more rows than IBKR_Portfolio when Kind = FX Cash exists. "
-            "Do not row-match the two sheets; match Stock/Future by Contract ID."
-        ),
+        "tip": _POSITIONS_VS_PORTFOLIO,
     },
     "IBKR_Portfolio": {
         "description": (
             "Marked securities from updatePortfolio: market price, market "
-            "value, and unrealized/realized P&L. Excludes FX cash contracts."
+            "value, and unrealized/realized P&L. Excludes FX cash contracts. "
+            "Sister tab: IBKR_Positions (full holdings list, includes FX)."
         ),
         "how_to_read": (
             "Quantity × Market Price ≈ Market Value. "
@@ -141,11 +160,7 @@ SHEET_GUIDES: dict[str, dict[str, str]] = {
             "Average Cost here is commission-inclusive (can differ slightly "
             "from Positions)."
         ),
-        "tip": (
-            "Prices tick between TWS and this snapshot — small MV/P&L drift "
-            "is normal. Futures MV can dwarf stock MV; GrossPositionValue "
-            "in Account Summary is usually stocks/options, not futures notional."
-        ),
+        "tip": _POSITIONS_VS_PORTFOLIO,
     },
     "IBKR_API_Messages": {
         "description": (
@@ -478,7 +493,8 @@ class ExcelExporter:
             label_cell.fill = _GUIDE_FILL
             body_cell.fill = _GUIDE_FILL
             worksheet.merge_cells(start_row=index, start_column=2, end_row=index, end_column=6)
-            worksheet.row_dimensions[index].height = 40
+            # Tip rows that carry the Positions↔Portfolio comparison need more height.
+            worksheet.row_dimensions[index].height = 72 if label == "Tip" else 40
 
         worksheet.row_dimensions[_GUIDE_ROW_COUNT].height = 8
         worksheet.column_dimensions["A"].width = 14
@@ -556,6 +572,45 @@ class ExcelExporter:
             worksheet.column_dimensions["B"].width or 0, 28
         )
 
+    def _find_refresh_command(self) -> Path | None:
+        """Locate scripts/refresh_workbook.command by walking up from the workbook."""
+        for parent in (self.output_path.resolve().parent, *self.output_path.resolve().parents):
+            candidate = parent / "scripts" / "refresh_workbook.command"
+            if candidate.is_file():
+                return candidate
+        return None
+
+    def _write_refresh_control(self, overview: Worksheet, row_number: int) -> None:
+        """Green clickable control that launches the Mac refresh script."""
+        label = overview.cell(row=row_number, column=1, value="Update data")
+        label.font = _REFRESH_LABEL_FONT
+
+        action = overview.cell(row=row_number, column=2, value="Refresh from TWS")
+        action.font = _REFRESH_FONT
+        action.fill = _REFRESH_FILL
+        action.alignment = Alignment(horizontal="center", vertical="center")
+
+        command = self._find_refresh_command()
+        if command is not None:
+            # file:// URI so Excel for Mac can open the .command in Terminal.
+            action.hyperlink = command.resolve().as_uri()
+        else:
+            action.value = "Run ./scripts/refresh_workbook.command"
+
+        hint_row = row_number + 1
+        hint = overview.cell(
+            row=hint_row,
+            column=1,
+            value=(
+                "Shortcut: closes this workbook, runs the IBKR snapshot, "
+                "reopens the file. Requires TWS/Gateway API on."
+            ),
+        )
+        hint.font = _GUIDE_BODY_FONT
+        overview.merge_cells(
+            start_row=hint_row, start_column=1, end_row=hint_row, end_column=2
+        )
+
     def _write_overview(
         self,
         workbook: Workbook,
@@ -613,6 +668,11 @@ class ExcelExporter:
         overview.cell(row=title_row, column=1).alignment = Alignment(
             horizontal="left", vertical="center"
         )
+
+        # Blank spacer, then the in-sheet refresh control.
+        control_row = data_start + len(overview_rows) + 1
+        self._write_refresh_control(overview, control_row)
+
         overview.column_dimensions["A"].width = 32
         overview.column_dimensions["B"].width = 42
         overview.freeze_panes = f"A{data_start}"
@@ -791,7 +851,7 @@ class ExcelExporter:
                 body_cell.alignment = Alignment(wrap_text=True, vertical="top")
                 label_cell.fill = _GUIDE_FILL
                 body_cell.fill = _GUIDE_FILL
-                ws.row_dimensions[index].height = 40
+                ws.row_dimensions[index].height = 72 if label == "Tip" else 40
             ws.row_dimensions[_GUIDE_ROW_COUNT].height = 8
 
     def _write_event_sheets(self, workbook: Workbook) -> None:
