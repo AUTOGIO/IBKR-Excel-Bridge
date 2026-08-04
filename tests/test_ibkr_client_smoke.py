@@ -84,6 +84,7 @@ def _install_ibapi_stub(with_error_time: bool) -> None:
             self.conId = 0
 
     if with_error_time:
+
         class EWrapper:
             def error(
                 self,
@@ -95,6 +96,7 @@ def _install_ibapi_stub(with_error_time: bool) -> None:
             ) -> None:
                 return None
     else:
+
         class EWrapper:  # type: ignore[no-redef]
             def error(
                 self,
@@ -121,6 +123,7 @@ def _load_client_module(with_error_time: bool):
     if str(src) not in sys.path:
         sys.path.insert(0, str(src))
     import ibkr_client  # noqa: WPS433 - dynamic import intentional
+
     return ibkr_client
 
 

@@ -19,7 +19,6 @@ from ibapi.client import EClient
 from ibapi.contract import Contract
 from ibapi.wrapper import EWrapper
 
-
 LOGGER = logging.getLogger(__name__)
 
 
@@ -83,6 +82,7 @@ class AccountValueRow:
     is not ``BASE``. The ``metric`` field is the key with the ``$LEDGER-``
     prefix stripped for readability.
     """
+
     account: str
     metric: str
     currency: str
@@ -229,13 +229,9 @@ class IBKRClient(EWrapper, EClient):
         # dual-dispatches many callbacks (legacy + *ProtoBuf) so plain
         # list.append() causes double rows. See analysis §2.1 (portfolio) and
         # the runtime finding for accountSummary / updateAccountValue.
-        self._account_summary: dict[
-            tuple[str, str, str], AccountSummaryRow
-        ] = {}
+        self._account_summary: dict[tuple[str, str, str], AccountSummaryRow] = {}
         # Keyed on (account, metric, currency) — one row per ledger metric.
-        self._account_values: dict[
-            tuple[str, str, str], AccountValueRow
-        ] = {}
+        self._account_values: dict[tuple[str, str, str], AccountValueRow] = {}
         self._positions: dict[tuple[str, int], PositionRow] = {}
         self._portfolio: dict[tuple[str, int], PortfolioRow] = {}
         self.errors: list[ErrorRow] = []
@@ -244,9 +240,7 @@ class IBKRClient(EWrapper, EClient):
 
         # ibapi >= 10.19 added ``errorTime`` to ``EWrapper.error``. Detect once
         # so we tolerate either signature at import time.
-        self._error_has_time: bool = (
-            "errorTime" in inspect.signature(EWrapper.error).parameters
-        )
+        self._error_has_time: bool = "errorTime" in inspect.signature(EWrapper.error).parameters
 
     # -- helpers --
 
@@ -279,9 +273,7 @@ class IBKRClient(EWrapper, EClient):
         client_id: int,
         timeout: int,
     ) -> None:
-        LOGGER.info(
-            "Connecting to IBKR at %s:%s with client ID %s", host, port, client_id
-        )
+        LOGGER.info("Connecting to IBKR at %s:%s with client ID %s", host, port, client_id)
 
         self._reset_events()
         self.connect(host, port, clientId=client_id)
@@ -358,9 +350,7 @@ class IBKRClient(EWrapper, EClient):
 
     def _download_portfolio(self, account: str, timeout: int) -> None:
         with self._lock:
-            event = self._account_download_events.setdefault(
-                account, threading.Event()
-            )
+            event = self._account_download_events.setdefault(account, threading.Event())
             event.clear()
 
         self.reqAccountUpdates(True, account)
@@ -415,9 +405,7 @@ class IBKRClient(EWrapper, EClient):
     def managedAccounts(self, accountsList: str) -> None:  # noqa: N802,N803
         with self._lock:
             self.managed_account_ids = [
-                account.strip()
-                for account in accountsList.split(",")
-                if account.strip()
+                account.strip() for account in accountsList.split(",") if account.strip()
             ]
         self.managed_accounts_event.set()
 
@@ -432,15 +420,13 @@ class IBKRClient(EWrapper, EClient):
         # Key on (account, tag, currency) so ibapi 10.19+ dual-dispatch
         # (legacy + accountSummaryProtoBuf) upserts instead of duplicating.
         with self._lock:
-            self._account_summary[(account, tag, currency or "")] = (
-                AccountSummaryRow(
-                    request_id=reqId,
-                    account=account,
-                    tag=tag,
-                    value=value,
-                    value_numeric=_try_float(value),
-                    currency=currency,
-                )
+            self._account_summary[(account, tag, currency or "")] = AccountSummaryRow(
+                request_id=reqId,
+                account=account,
+                tag=tag,
+                value=value,
+                value_numeric=_try_float(value),
+                currency=currency,
             )
 
     def accountSummaryEnd(self, reqId: int) -> None:  # noqa: N802
@@ -459,20 +445,18 @@ class IBKRClient(EWrapper, EClient):
         # is only emitted with segment suffixes in the base currency.
         if not key.startswith(LEDGER_PREFIX):
             return
-        metric = key[len(LEDGER_PREFIX):]
+        metric = key[len(LEDGER_PREFIX) :]
         if metric not in LEDGER_METRICS:
             return
         if not currency or currency == "BASE":
             return
         with self._lock:
-            self._account_values[(accountName, metric, currency)] = (
-                AccountValueRow(
-                    account=accountName,
-                    metric=metric,
-                    currency=currency,
-                    value=val,
-                    value_numeric=_try_float(val),
-                )
+            self._account_values[(accountName, metric, currency)] = AccountValueRow(
+                account=accountName,
+                metric=metric,
+                currency=currency,
+                value=val,
+                value_numeric=_try_float(val),
             )
 
     def position(
@@ -533,9 +517,7 @@ class IBKRClient(EWrapper, EClient):
     def accountDownloadEnd(self, accountName: str) -> None:  # noqa: N802,N803
         LOGGER.info("Portfolio download completed for %s", accountName)
         with self._lock:
-            event = self._account_download_events.setdefault(
-                accountName, threading.Event()
-            )
+            event = self._account_download_events.setdefault(accountName, threading.Event())
         event.set()
 
     # ibapi < 10.19 signature: (reqId, errorCode, errorString, advancedOrderRejectJson)

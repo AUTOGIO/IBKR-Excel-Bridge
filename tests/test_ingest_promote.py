@@ -86,7 +86,7 @@ def test_promote_appends_formulas_idempotent(tmp_path: Path) -> None:
     ws["E5"] = 10
     ws["F5"] = 5
     ws["H5"] = '=IF(D5="","",IF(OR(E5="",F5=""),"",D5*E5*F5))'
-    ws["I5"] = "=IF(B5=\"\",\"\",1)"
+    ws["I5"] = '=IF(B5="","",1)'
     ws["J5"] = '=IF(C5="Venda",1,"")'
     ws["K5"] = '=IF(C5="Rendimento",1,0)'
     ws["M5"] = '=IF(A5="","","OK")'
@@ -103,8 +103,8 @@ def test_promote_appends_formulas_idempotent(tmp_path: Path) -> None:
     ws2 = load_workbook(wb_path)["Registro_Real"]
     assert ws2["B6"].value == "AAPL" or ws2["B7"].value == "AAPL"
     # formulas retargeted
-    assert "D6" in str(ws2["H6"].value) or "D7" in str(ws2["H6"].value) or "D6" in str(
-        ws2["H7"].value
+    assert (
+        "D6" in str(ws2["H6"].value) or "D7" in str(ws2["H6"].value) or "D6" in str(ws2["H7"].value)
     )
 
     summary2 = promote_events_to_workbook(wb_path, events_path)

@@ -17,7 +17,6 @@ import json
 from pathlib import Path
 from typing import Any
 
-
 CONFIG_FILENAME = "settings.json"
 LOCAL_OVERRIDE_FILENAME = "settings.local.json"
 
@@ -53,9 +52,7 @@ def load_config(project_root: Path) -> dict[str, Any]:
         with local_path.open("r", encoding="utf-8") as handle:
             local = json.load(handle)
         if not isinstance(local, dict):
-            raise ValueError(
-                f"{local_path} must contain a JSON object; got {type(local).__name__}"
-            )
+            raise ValueError(f"{local_path} must contain a JSON object; got {type(local).__name__}")
         config = _deep_merge(config, local)
 
     return config

@@ -10,7 +10,6 @@ from openpyxl import load_workbook
 
 from events_store import load_events, save_events
 
-
 _FORMULA_COLS = ("H", "I", "J", "K", "M", "N", "O")
 _EVENT_ID_RE = re.compile(r"event_id=([0-9a-f]+)")
 
@@ -228,9 +227,7 @@ def derive_positions_from_events(events: list[dict[str, Any]]) -> list[dict[str,
         qty = float(event.get("quantity") or 0)
         price = event.get("price_usd")
         ptax = event.get("ptax")
-        slot = state.setdefault(
-            symbol, {"qty": 0.0, "cost_usd": 0.0, "cost_brl": 0.0}
-        )
+        slot = state.setdefault(symbol, {"qty": 0.0, "cost_usd": 0.0, "cost_brl": 0.0})
         if tipo == "Compra" and price is not None:
             slot["cost_usd"] += qty * float(price)
             if ptax is not None:

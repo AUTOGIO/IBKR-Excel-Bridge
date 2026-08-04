@@ -11,7 +11,6 @@ from typing import Any
 
 from events_store import make_event_id
 
-
 _DATE_FORMATS = (
     "%Y-%m-%d",
     "%Y%m%d",
@@ -169,9 +168,7 @@ def parse_statement_csv(
     headers = reader_rows[header_idx]
     cols = _resolve_columns(headers)
     if "symbol" not in cols or "quantity" not in cols:
-        raise ValueError(
-            f"CSV {path.name} missing Symbol/Quantity columns (got {headers})"
-        )
+        raise ValueError(f"CSV {path.name} missing Symbol/Quantity columns (got {headers})")
 
     events: list[dict[str, Any]] = []
     for row_num, row in enumerate(reader_rows[header_idx + 1 :], start=header_idx + 2):
@@ -181,7 +178,9 @@ def parse_statement_csv(
         if len(row) == 1 or _looks_like_header(row):
             continue
 
-        def cell(logical: str) -> str:
+        def cell(logical: str, row: list[str] = row) -> str:
+            # Default-arg binding freezes ``row`` per iteration so this
+            # closure is not confused when reused across loop iterations.
             idx = cols.get(logical)
             if idx is None or idx >= len(row):
                 return ""
@@ -216,8 +215,7 @@ def parse_statement_csv(
         )
         if tipo == "Rendimento":
             obs = (
-                f"IBKR dividendo {date} | event_id={event_id} | "
-                f"source={path.name} | ano={date[:4]}"
+                f"IBKR dividendo {date} | event_id={event_id} | source={path.name} | ano={date[:4]}"
             )
         else:
             side = "O" if tipo == "Compra" else "C"

@@ -19,7 +19,6 @@ from config_loader import load_config as _load_settings  # noqa: E402
 from excel_exporter import ExcelExporter  # noqa: E402
 from ibkr_client import IBKRClient  # noqa: E402
 
-
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 LOG_FILE = PROJECT_ROOT / "logs" / "ibkr_excel_bridge.log"
 
@@ -83,9 +82,7 @@ def assert_expected_account(data: dict[str, Any], expected: str) -> None:
     accounts = {row.get("account") for row in data.get("accounts", [])}
     if expected not in accounts:
         found = sorted(a for a in accounts if a)
-        raise ValueError(
-            f"expected_account {expected!r} not in managed accounts {found}"
-        )
+        raise ValueError(f"expected_account {expected!r} not in managed accounts {found}")
 
 
 def main() -> int:
@@ -128,13 +125,9 @@ def main() -> int:
             timeout=int(ibkr_config["connection_timeout_seconds"]),
         )
 
-        data = client.collect(
-            timeout=int(ibkr_config["collection_timeout_seconds"])
-        )
+        data = client.collect(timeout=int(ibkr_config["collection_timeout_seconds"]))
 
-        assert_expected_account(
-            data, str(ibkr_config.get("expected_account", "") or "")
-        )
+        assert_expected_account(data, str(ibkr_config.get("expected_account", "") or ""))
 
         exporter = ExcelExporter(
             output_path,

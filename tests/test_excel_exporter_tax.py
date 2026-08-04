@@ -74,9 +74,7 @@ def test_tax_mode_preserves_foreign_and_writes_recon(tmp_path: Path) -> None:
     wb.create_sheet("Registro_Real")["A1"] = "keep-me"
     wb.save(path)
 
-    ExcelExporter(path, mode="tax_workbook", qty_tolerance=0.0001).export(
-        _sample_data()
-    )
+    ExcelExporter(path, mode="tax_workbook", qty_tolerance=0.0001).export(_sample_data())
     wb2 = load_workbook(path)
     assert wb2["Registro_Real"]["A1"].value == "keep-me"
     assert "IBKR_Positions" in wb2.sheetnames

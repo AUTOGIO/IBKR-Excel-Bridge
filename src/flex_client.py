@@ -14,9 +14,7 @@ def download_flex_statement(
     token: str,
     query_id: str,
     out_dir: Path,
-    base_url: str = (
-        "https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"
-    ),
+    base_url: str = ("https://ndcdyn.interactivebrokers.com/AccountManagement/FlexWebService"),
 ) -> Path:
     """Download a Flex query result into ``out_dir``.
 

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 
 def make_event_id(
@@ -47,7 +48,11 @@ def save_events(path: Path, events: Iterable[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     ordered = sorted(
         events,
-        key=lambda e: (str(e.get("date", "")), str(e.get("symbol", "")), str(e.get("event_id", ""))),
+        key=lambda e: (
+            str(e.get("date", "")),
+            str(e.get("symbol", "")),
+            str(e.get("event_id", "")),
+        ),
     )
     with path.open("w", encoding="utf-8") as handle:
         for event in ordered:

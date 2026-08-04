@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import logging
 import zipfile
+from collections.abc import Iterable
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Iterable
+from typing import Any
 
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
@@ -43,9 +44,7 @@ _MONEY_COLUMNS: frozenset[str] = frozenset(
 
 # Columns rendered as quantities (up to 4 decimals to accommodate fractional
 # shares and FX lots).
-_QUANTITY_COLUMNS: frozenset[str] = frozenset(
-    {"quantity", "qty_ibkr", "qty_fiscal", "delta"}
-)
+_QUANTITY_COLUMNS: frozenset[str] = frozenset({"quantity", "qty_ibkr", "qty_fiscal", "delta"})
 
 _MONEY_FORMAT: str = "#,##0.00;[Red]-#,##0.00"
 _QUANTITY_FORMAT: str = "#,##0.####"
@@ -195,8 +194,7 @@ SHEET_GUIDES: dict[str, dict[str, str]] = {
     },
     "IBKR_Posicao_From_Events": {
         "description": (
-            "Positions derived by replaying promoted events (quantity and "
-            "average cost in USD/BRL)."
+            "Positions derived by replaying promoted events (quantity and average cost in USD/BRL)."
         ),
         "how_to_read": (
             "Compare Symbol/Quantity here to IBKR_Positions and to fiscal "
@@ -304,8 +302,7 @@ class ExcelExporter:
         lock = self.output_path.parent / f"~${self.output_path.name}"
         if lock.exists():
             raise PermissionError(
-                f"Workbook appears open in Excel ({lock.name}). "
-                "Close Excel and retry."
+                f"Workbook appears open in Excel ({lock.name}). Close Excel and retry."
             )
 
     def _load_or_create_workbook(self) -> Workbook:
@@ -409,9 +406,7 @@ class ExcelExporter:
                 if len(value) > maximum_length:
                     maximum_length = min(len(value), cap)
             if maximum_length:
-                worksheet.column_dimensions[column_letter].width = min(
-                    maximum_length + 3, cap
-                )
+                worksheet.column_dimensions[column_letter].width = min(maximum_length + 3, cap)
 
     @staticmethod
     def _apply_number_format(cell: Any, column: str) -> None:
@@ -482,9 +477,7 @@ class ExcelExporter:
             body_cell.alignment = Alignment(wrap_text=True, vertical="top")
             label_cell.fill = _GUIDE_FILL
             body_cell.fill = _GUIDE_FILL
-            worksheet.merge_cells(
-                start_row=index, start_column=2, end_row=index, end_column=6
-            )
+            worksheet.merge_cells(start_row=index, start_column=2, end_row=index, end_column=6)
             worksheet.row_dimensions[index].height = 40
 
         worksheet.row_dimensions[_GUIDE_ROW_COUNT].height = 8
@@ -524,9 +517,7 @@ class ExcelExporter:
             if name not in seen_keys:
                 columns.append(name)
 
-        header_fill = PatternFill(
-            start_color="FF1F4E78", end_color="FF1F4E78", fill_type="solid"
-        )
+        header_fill = PatternFill(start_color="FF1F4E78", end_color="FF1F4E78", fill_type="solid")
         header_row = data_start
 
         for index, column in enumerate(columns, start=1):
@@ -617,9 +608,7 @@ class ExcelExporter:
             right.font = _BODY_FONT
 
         title_row = data_start
-        overview.merge_cells(
-            start_row=title_row, start_column=1, end_row=title_row, end_column=2
-        )
+        overview.merge_cells(start_row=title_row, start_column=1, end_row=title_row, end_column=2)
         overview.cell(row=title_row, column=1).font = _TITLE_FONT
         overview.cell(row=title_row, column=1).alignment = Alignment(
             horizontal="left", vertical="center"

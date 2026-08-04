@@ -34,9 +34,7 @@ def main() -> int:
 
     statements_dir = PROJECT_ROOT / ingest_cfg.get("statements_dir", "data/statements")
     events_path = PROJECT_ROOT / ingest_cfg.get("events_file", "data/events.jsonl")
-    aliases_path = PROJECT_ROOT / ingest_cfg.get(
-        "aliases_file", "config/symbol_aliases.json"
-    )
+    aliases_path = PROJECT_ROOT / ingest_cfg.get("aliases_file", "config/symbol_aliases.json")
     tax_workbook = PROJECT_ROOT / excel_cfg.get(
         "tax_workbook", "data/output/TRIBUTACAO_WORKING.xlsx"
     )

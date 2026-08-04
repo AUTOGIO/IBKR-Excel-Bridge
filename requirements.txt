@@ -2,3 +2,4 @@ openpyxl>=3.1,<4
 # ibapi is installed separately from the IBKR-distributed TWS API source tree.
 # See scripts/setup.zsh and README.md. Tested against ibapi 10.19+.
 pytest>=8,<10
+ruff>=0.6,<1  # lint + format; config in ruff.toml. Run: ./.venv/bin/ruff check . && ./.venv/bin/ruff format .
