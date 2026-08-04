@@ -39,7 +39,7 @@ One JSON object per line:
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `event_id` | string | Stable hash: `sha1(date\|symbol\|tipo\|qty\|price\|source_row)` or IBKR trade id when present |
+| `event_id` | string | Stable hash: first 16 hex chars of `sha1(date\|symbol\|tipo\|qty\|price\|source_row)` (64 bits — collision-free for personal statement volumes); or the IBKR trade id when present in the CSV |
 | `date` | string | ISO date `YYYY-MM-DD` (trade/report date from file; settlement adjustment later) |
 | `symbol` | string | Normalized upper-case; alias map applied |
 | `tipo_evento` | string | `Compra` \| `Venda` \| `Rendimento` |

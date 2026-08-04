@@ -119,6 +119,13 @@ def _looks_like_header(row: list[str]) -> bool:
 
 
 def _map_tipo(buysell: str | None, tradetype: str | None, quantity: float) -> str | None:
+    """Classify a CSV row into ``Compra``/``Venda``/``Rendimento`` or ``None``.
+
+    Requires an explicit signal (``Buy/Sell`` cell, a trade-type keyword, or
+    a dividend keyword). Rows carrying only a signed quantity are returned
+    as ``None`` so the caller drops them — sign alone is not enough to
+    distinguish trades from corporate actions, transfers, or FX conversions.
+    """
     bs = (buysell or "").strip().upper()
     tt = (tradetype or "").strip().upper()
     if any(x in tt for x in ("DIV", "DIVIDEND", "PIK", "PAYMENT IN LIEU")):
@@ -131,10 +138,8 @@ def _map_tipo(buysell: str | None, tradetype: str | None, quantity: float) -> st
         return "Compra"
     if "SELL" in tt:
         return "Venda"
-    if quantity > 0 and not bs:
-        return "Compra"
-    if quantity < 0 and not bs:
-        return "Venda"
+    # Intentionally no sign-only fallback: see docstring.
+    _ = quantity
     return None
 
 

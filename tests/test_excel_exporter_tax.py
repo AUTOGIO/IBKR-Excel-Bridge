@@ -15,12 +15,12 @@ from excel_exporter import ExcelExporter  # noqa: E402
 
 def _sample_data() -> dict:
     return {
-        "accounts": [{"account": "U6658119"}],
+        "accounts": [{"account": "UACCT123"}],
         "account_summary": [],
         "account_values": [],
         "positions": [
             {
-                "account": "U6658119",
+                "account": "UACCT123",
                 "symbol": "AMZN",
                 "instrument_kind": "Stock",
                 "security_type": "STK",
@@ -32,7 +32,7 @@ def _sample_data() -> dict:
                 "average_cost": 1.0,
             },
             {
-                "account": "U6658119",
+                "account": "UACCT123",
                 "symbol": "EUR",
                 "instrument_kind": "FX Cash",
                 "security_type": "CASH",

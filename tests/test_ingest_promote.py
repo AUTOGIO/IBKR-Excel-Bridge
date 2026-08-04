@@ -136,3 +136,20 @@ def test_load_aliases(tmp_path: Path) -> None:
     path.write_text('{"LQDEz": "LQDE"}', encoding="utf-8")
     aliases = load_aliases(path)
     assert aliases["LQDEZ"] == "LQDE"
+
+
+def test_map_tipo_requires_explicit_signal(tmp_path: Path) -> None:
+    """Rows with only a signed quantity (corporate actions, transfers, FX
+    conversions) must be dropped, not silently classified as trades."""
+    csv = tmp_path / "ambiguous.csv"
+    csv.write_text(
+        "Symbol,Date/Time,Quantity,TradePrice,Type\n"
+        # No Buy/Sell column and Type is neither BUY/SELL/DIVIDEND.
+        "FOO,20260710;000000,100,10.00,CorporateAction\n"
+        # Explicit BUY still parses through.
+        "BAR,20260710;000000,50,20.00,BUY\n",
+        encoding="utf-8",
+    )
+    events = parse_statement_csv(csv)
+    symbols = {e["symbol"] for e in events}
+    assert symbols == {"BAR"}, f"FOO should have been dropped: {events}"

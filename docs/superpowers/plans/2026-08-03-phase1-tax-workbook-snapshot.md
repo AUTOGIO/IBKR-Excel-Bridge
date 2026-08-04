@@ -1,5 +1,7 @@
 # Phase 1 Tax Workbook IBKR Snapshot Implementation Plan
 
+> **Status:** Done — implemented in commit `a89d4bc` ("Add tax-workbook mode with IBKR_* sheets and qty reconciliation"). Kept as a historical design record. Do not treat the `- [ ]` checkboxes below as open work.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Refresh machine-owned `IBKR_*` sheets inside a Lei 14.754 working workbook and write `IBKR_Reconciliacao` without touching fiscal sheets.
@@ -184,15 +186,15 @@ from excel_exporter import ExcelExporter
 
 def _sample_data():
     return {
-        "accounts": [{"account": "U6658119"}],
+        "accounts": [{"account": "<YOUR_ACCT>"}],
         "account_summary": [],
         "account_values": [],
         "positions": [
-            {"account": "U6658119", "symbol": "AMZN", "instrument_kind": "Stock",
+            {"account": "<YOUR_ACCT>", "symbol": "AMZN", "instrument_kind": "Stock",
              "security_type": "STK", "currency": "USD", "exchange": "NASDAQ",
              "primary_exchange": "NASDAQ", "contract_id": 1, "quantity": 7,
              "average_cost": 1.0},
-            {"account": "U6658119", "symbol": "EUR", "instrument_kind": "FX Cash",
+            {"account": "<YOUR_ACCT>", "symbol": "EUR", "instrument_kind": "FX Cash",
              "security_type": "CASH", "currency": "USD", "exchange": "IDEALPRO",
              "primary_exchange": "", "contract_id": 2, "quantity": 1000,
              "average_cost": 0},
@@ -359,8 +361,8 @@ Call order in `main`: collect → assert_expected_account → ExcelExporter(...)
   },
   "excel": {
     "output_mode": "standalone",
-    "output_file": "output/IBKR_Portfolio.xlsx",
-    "tax_workbook": "output/U6658119_TRIBUTACAO_WORKING.xlsx",
+    "output_file": "data/output/IBKR_Portfolio.xlsx",
+    "tax_workbook": "data/output/TRIBUTACAO_WORKING.xlsx",
     "qty_tolerance": 0.0001
   },
   "logging": { "level": "INFO" }
@@ -383,11 +385,11 @@ Call order in `main`: collect → assert_expected_account → ExcelExporter(...)
 Bootstrap command to document:
 
 ```bash
-cp "output/U6658119_TRIBUTACAO-LEI14754_v5-1-RECONCILIADO_2021-2026 copy.xlsx" \
-   output/U6658119_TRIBUTACAO_WORKING.xlsx
+cp "archive/<YOUR_ACCT>_TRIBUTACAO-LEI14754_v5-1-RECONCILIADO_2021-2026 copy.xlsx" \
+   data/output/TRIBUTACAO_WORKING.xlsx
 ```
 
-Then set `"output_mode": "tax_workbook"` and optionally `"expected_account": "U6658119"`.
+Then set `"output_mode": "tax_workbook"` and optionally `"expected_account": "<YOUR_ACCT>"`.
 
 ---
 

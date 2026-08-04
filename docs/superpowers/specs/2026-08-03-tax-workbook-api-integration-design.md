@@ -8,9 +8,9 @@
 
 The Lei 14.754 workbook
 
-`output/U6658119_TRIBUTACAO-LEI14754_v5-1-RECONCILIADO_2021-2026 copy.xlsx`
+`archive/<YOUR_ACCT>_TRIBUTACAO-LEI14754_v5-1-RECONCILIADO_2021-2026 copy.xlsx`
 
-is a curated fiscal model (events, MyProfit costs, annual apuração). This repo’s MVP already snapshots IBKR via the read-only TWS API into `output/IBKR_Portfolio.xlsx`, but that snapshot is isolated from the tax file.
+is a curated fiscal model (events, MyProfit costs, annual apuração). This repo’s MVP already snapshots IBKR via the read-only TWS API into `data/output/IBKR_Portfolio.xlsx`, but that snapshot is isolated from the tax file.
 
 We need a safe way to:
 
@@ -33,7 +33,7 @@ We need a safe way to:
 | Fiscal sheets | Never rewritten by the exporter | Tax integrity; MyProfit remains fiscal cost source of truth for now |
 | Quantity trust | Explicit `IBKR_Reconciliacao` diff only | Avoids clean-looking wrong DIRPF |
 | Runtime host | Support TWS **and** IB Gateway | Gateway uses ~40% fewer resources for API-only runs |
-| Account check | Optional `expected_account` in config | Fail loud if paper `DUR…` is used against a U6658119 workbook by mistake |
+| Account check | Optional `expected_account` in config | Fail loud if paper `DUR…` is used against a <YOUR_ACCT> workbook by mistake |
 | Phase 3 truth | Canonical `events.jsonl` then staged Excel write | Aligns with workbook `Spec_Motor_Python` `ingest.py` guidance |
 
 ## Architecture — Phase 1
@@ -52,14 +52,14 @@ TWS or IB Gateway (Read-Only)
         └─ leave all other sheets untouched
         │
         ▼
-  tax working workbook under output/
+  tax working workbook under data/output/
 ```
 
 ### Workbook target
 
-- Long-term path: `output/U6658119_TRIBUTACAO_WORKING.xlsx`
+- Long-term path: `data/output/TRIBUTACAO_WORKING.xlsx`
 - Bootstrap: copy from the current reconciled file once (manual or setup helper). Do not use the dated `… copy.xlsx` name as the permanent target.
-- Optional: keep writing a standalone `output/IBKR_Portfolio.xlsx` when `excel.output_mode` is `standalone` (paper smoke tests without touching the tax file).
+- Optional: keep writing a standalone `data/output/IBKR_Portfolio.xlsx` when `excel.output_mode` is `standalone` (paper smoke tests without touching the tax file).
 
 ### Owned sheets (exporter-owned; deleted and rewritten each run)
 
@@ -117,8 +117,8 @@ Phase 1 does **not** change formulas in `Posicoes_Atuais`.
   },
   "excel": {
     "output_mode": "standalone",
-    "output_file": "output/IBKR_Portfolio.xlsx",
-    "tax_workbook": "output/U6658119_TRIBUTACAO_WORKING.xlsx",
+    "output_file": "data/output/IBKR_Portfolio.xlsx",
+    "tax_workbook": "data/output/TRIBUTACAO_WORKING.xlsx",
     "qty_tolerance": 0.0001
   },
   "logging": {
@@ -148,9 +148,9 @@ Notes:
 
 ### Operations checklist (Phase 1)
 
-1. Copy reconciled tax xlsx → `output/U6658119_TRIBUTACAO_WORKING.xlsx`.
+1. Copy reconciled tax xlsx → `data/output/TRIBUTACAO_WORKING.xlsx`.
 2. Prefer **IB Gateway** for API-only runs (lower resource use); enable socket clients + Read-Only API; set port in config.
-3. For real recon against the tax account, log Gateway/TWS into **U6658119** and set `expected_account` to that id.
+3. For real recon against the tax account, log Gateway/TWS into **<YOUR_ACCT>** and set `expected_account` to that id.
 4. Run `./scripts/run.zsh` with `output_mode: tax_workbook`.
 5. Open `IBKR_Reconciliacao`; resolve `DIVERGE` / `ONLY_*` manually before trusting any downstream use.
 6. Keep paper/`standalone` available for regression without touching the tax file.
@@ -197,7 +197,7 @@ Phase 3 implementation plan is a separate document after Phase 1 ships.
 - **Unit:** reconciliation matrix (OK / DIVERGE / ONLY_IBKR / ONLY_FISCAL); tolerance boundary; symbol normalization.
 - **Unit:** exporter with a fixture workbook containing foreign sheets + fake fiscal qty table; assert foreign sheets survive and owned sheets refresh.
 - **Unit:** `tax_workbook` mode refuses missing/corrupt file.
-- **Smoke (manual):** Gateway paper → `standalone`; then tax mode against working copy with `expected_account` unset; then live U6658119 with expected account set.
+- **Smoke (manual):** Gateway paper → `standalone`; then tax mode against working copy with `expected_account` unset; then live <YOUR_ACCT> with expected account set.
 
 ## Success criteria — Phase 1
 

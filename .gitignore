@@ -1,22 +1,39 @@
+# Python
 .venv/
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
+*$py.class
 .python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
 
+# Local / secrets
+# Personal overrides for config/settings.json (account id, Flex token, …).
+# See config/settings.local.json.example.
+config/settings.local.json
+
+# Runtime / generated
 logs/*
 !logs/.gitkeep
-
-output/*
-!output/.gitkeep
-
+tmp/
+data/output/*
+!data/output/.gitkeep
 data/statements/*
 !data/statements/.gitkeep
 data/events.jsonl
 
-config/settings.local.json
+# Excel lock / temp files
+~$*
+*.tmp
 
+# Personal / large workbooks kept locally in archive
+archive/*.xlsx
+
+# OS / editors
 .DS_Store
 .idea/
 .vscode/

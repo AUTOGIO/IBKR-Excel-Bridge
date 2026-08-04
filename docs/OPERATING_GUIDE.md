@@ -4,6 +4,12 @@ This repo is a **read-only bridge**. It never buys, sells, or edits fiscal costs
 You trade in TWS (or IBKR Client Portal). You declare tax in the Lei 14.754 workbook.
 This project only **snapshots** live positions and **reconciles** them against fiscal sheets.
 
+> **Personal values:** replace `<YOUR_ACCT>` with your real IBKR account id
+> (e.g. `U0000000`) in `config/settings.local.json` — that file is gitignored
+> and deep-merged over `config/settings.json` at runtime. Copy
+> `config/settings.local.json.example` to get started. Never put your real
+> account id in tracked files.
+
 ```text
 YOU TRADE IN TWS          THIS REPO                    YOU REVIEW IN EXCEL
 ─────────────────         ──────────────               ────────────────────
@@ -19,19 +25,22 @@ Buy / sell ETF     →      ./scripts/run.zsh     →      IBKR_* sheets
 
 ## Two modes (pick one per run)
 
-Edit only [`config/settings.json`](../config/settings.json).
+Change shared defaults in [`config/settings.json`](../config/settings.json); put
+personal values (account id, custom tax-workbook filename, Flex token) in
+[`config/settings.local.json`](../config/settings.local.json.example) — that
+file is gitignored and deep-merged on top of the base settings at runtime.
 
 | Mode | When | Output |
 | --- | --- | --- |
-| `standalone` (default) | Paper smoke tests, quick portfolio peek | `output/IBKR_Portfolio.xlsx` |
-| `tax_workbook` | Real work against the Lei 14.754 file | `output/U6658119_TRIBUTACAO_WORKING.xlsx` |
+| `standalone` (default) | Paper smoke tests, quick portfolio peek | `data/output/IBKR_Portfolio.xlsx` |
+| `tax_workbook` | Real work against the Lei 14.754 file | `data/output/TRIBUTACAO_WORKING.xlsx` |
 
 Rules of thumb:
 
 1. Close the target workbook in Excel before running (lock files block writes).
 2. Prefer **IB Gateway** for API-only runs (less CPU/RAM). Ports: Gateway paper `4002`, TWS paper `7497`.
 3. Keep **Read-Only API** ON. This repo has no order code.
-4. Set `"expected_account": "U6658119"` only when TWS/Gateway is logged into that account.
+4. Set `"expected_account": "<YOUR_ACCT>"` only when TWS/Gateway is logged into that account.
 5. Never hand-edit `IBKR_*` tabs — they are rewritten every run.
 6. Fiscal truth stays in `MyProfit_2026`, `Posicoes_Atuais`, `Registro_Real`.
 
@@ -71,16 +80,16 @@ Tests after code changes: `./.venv/bin/python -m pytest tests -q`.
 
 ## Worked example: buy an ETF → last task this repo can do today
 
-Scenario: you buy **100 shares of BIL** (US T-bill ETF) in account **U6658119**, then use this repo through the last automated step (qty reconciliation). Fiscal event registration remains manual until Phase 3.
+Scenario: you buy **100 shares of BIL** (US T-bill ETF) in account **<YOUR_ACCT>**, then use this repo through the last automated step (qty reconciliation). Fiscal event registration remains manual until Phase 3.
 
 ### Step 0 — One-time bootstrap (already done if the working file exists)
 
 ```bash
-cp "output/U6658119_TRIBUTACAO-LEI14754_v5-1-RECONCILIADO_2021-2026 copy.xlsx" \
-   output/U6658119_TRIBUTACAO_WORKING.xlsx
+cp "archive/<YOUR_ACCT>_TRIBUTACAO-LEI14754_v5-1-RECONCILIADO_2021-2026 copy.xlsx" \
+   data/output/TRIBUTACAO_WORKING.xlsx
 ```
 
-Always work on `U6658119_TRIBUTACAO_WORKING.xlsx`, not the dated `copy` file.
+Always work on `TRIBUTACAO_WORKING.xlsx`, not the dated `copy` file.
 
 ### Step 1 — Buy the ETF in TWS (outside this repo)
 
@@ -103,11 +112,11 @@ In `config/settings.json`:
     "host": "127.0.0.1",
     "port": 7497,
     "client_id": 21,
-    "expected_account": "U6658119"
+    "expected_account": "<YOUR_ACCT>"
   },
   "excel": {
     "output_mode": "tax_workbook",
-    "tax_workbook": "output/U6658119_TRIBUTACAO_WORKING.xlsx",
+    "tax_workbook": "data/output/TRIBUTACAO_WORKING.xlsx",
     "qty_tolerance": 0.0001
   }
 }
@@ -127,7 +136,7 @@ For Gateway paper, use `"port": 4002`.
 Success looks like:
 
 ```text
-SUCCESS: .../output/U6658119_TRIBUTACAO_WORKING.xlsx
+SUCCESS: .../data/output/TRIBUTACAO_WORKING.xlsx
 ```
 
 What the run did:
@@ -204,7 +213,7 @@ When `src/flex_client.py` is fully implemented, Step 5 download becomes automati
 | Symptom | Fix |
 | --- | --- |
 | Socket not reachable | Open TWS/Gateway; match `port` |
-| Workbook appears open | Close Excel; remove stale `output/~$*` only if Excel is quit |
+| Workbook appears open | Close Excel; remove stale `data/output/~$*` only if Excel is quit |
 | `expected_account` error | Log into the right account or clear the setting |
 | Everything `ONLY_FISCAL` | You snapshotted paper against the live tax book |
 | Want portfolio only | `"output_mode": "standalone"` |
@@ -213,10 +222,10 @@ When `src/flex_client.py` is fully implemented, Step 5 download becomes automati
 
 ## Mental checklist before any “real” tax run
 
-- [ ] Logged into **U6658119** (not paper)
+- [ ] Logged into **<YOUR_ACCT>** (not paper)
 - [ ] Read-Only API on
 - [ ] `output_mode` = `tax_workbook`
-- [ ] `expected_account` = `U6658119`
+- [ ] `expected_account` = `<YOUR_ACCT>`
 - [ ] Working xlsx closed in Excel
 - [ ] After run: `IBKR_Reconciliacao` reviewed
 - [ ] New trades reflected in `Registro_Real` + MyProfit before trusting DARF

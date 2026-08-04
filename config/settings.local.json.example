@@ -1,0 +1,14 @@
+{
+  "_comment": "Copy to settings.local.json (gitignored) and fill in personal values. Deep-merged on top of settings.json at runtime.",
+  "ibkr": {
+    "expected_account": "U0000000"
+  },
+  "excel": {
+    "tax_workbook": "data/output/U0000000_TRIBUTACAO_WORKING.xlsx"
+  },
+  "flex": {
+    "enabled": false,
+    "token": "",
+    "query_id": ""
+  }
+}

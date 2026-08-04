@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import sys
 from pathlib import Path
@@ -12,13 +11,13 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+from config_loader import load_config  # noqa: E402
 from events_store import load_events, merge_events, save_events  # noqa: E402
 from flex_client import download_flex_statement  # noqa: E402
 from ingest_statements import ingest_directory, load_aliases  # noqa: E402
 from promote_events import write_staging_sheets  # noqa: E402
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_FILE = PROJECT_ROOT / "config" / "settings.json"
 
 
 def main() -> int:
@@ -28,7 +27,7 @@ def main() -> int:
     )
     log = logging.getLogger("ingest")
 
-    config = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
+    config = load_config(PROJECT_ROOT)
     ingest_cfg = config.get("ingest", {})
     excel_cfg = config.get("excel", {})
     flex_cfg = config.get("flex", {})
@@ -39,7 +38,7 @@ def main() -> int:
         "aliases_file", "config/symbol_aliases.json"
     )
     tax_workbook = PROJECT_ROOT / excel_cfg.get(
-        "tax_workbook", "output/U6658119_TRIBUTACAO_WORKING.xlsx"
+        "tax_workbook", "data/output/TRIBUTACAO_WORKING.xlsx"
     )
 
     statements_dir.mkdir(parents=True, exist_ok=True)
@@ -73,9 +72,14 @@ def main() -> int:
             write_staging_sheets(tax_workbook, merged)
             staging_ok = True
             log.info("Staging sheets updated in %s", tax_workbook)
-        except PermissionError as exc:
-            log.warning("%s", exc)
-            log.warning("events.jsonl saved; close Excel and re-run ingest to refresh staging.")
+        except (PermissionError, FileNotFoundError, ValueError, KeyError) as exc:
+            # Keep the ingest a success even if the tax workbook cannot be
+            # refreshed right now (open in Excel, missing sheet, corrupt).
+            # events.jsonl is already saved above.
+            log.warning("Staging refresh deferred: %s", exc)
+            log.warning(
+                "events.jsonl saved; fix the tax workbook and re-run ingest to refresh staging."
+            )
     else:
         log.warning("Tax workbook missing (%s); events saved only.", tax_workbook)
 

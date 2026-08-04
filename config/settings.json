@@ -10,9 +10,9 @@
     "expected_account": ""
   },
   "excel": {
-    "output_mode": "tax_workbook",
-    "output_file": "output/IBKR_Portfolio.xlsx",
-    "tax_workbook": "output/U6658119_TRIBUTACAO_WORKING.xlsx",
+    "output_mode": "standalone",
+    "output_file": "data/output/IBKR_Portfolio.xlsx",
+    "tax_workbook": "data/output/TRIBUTACAO_WORKING.xlsx",
     "qty_tolerance": 0.0001
   },
   "ingest": {

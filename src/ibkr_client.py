@@ -328,19 +328,33 @@ class IBKRClient(EWrapper, EClient):
             )
 
         self.reqAccountSummary(REQ_ACCOUNT_SUMMARY, "All", ACCOUNT_SUMMARY_TAGS)
-        if not self.account_summary_end_event.wait(timeout):
-            raise TimeoutError("Account summary request timed out.")
-        self.cancelAccountSummary(REQ_ACCOUNT_SUMMARY)
+        try:
+            if not self.account_summary_end_event.wait(timeout):
+                raise TimeoutError("Account summary request timed out.")
+        finally:
+            # Cancel the subscription even on timeout so a subsequent run
+            # (or ``stop()``) does not leave a live subscription on the wire.
+            self._safe_cancel(self.cancelAccountSummary, REQ_ACCOUNT_SUMMARY)
 
         self.reqPositions()
-        if not self.positions_end_event.wait(timeout):
-            raise TimeoutError("Positions request timed out.")
-        self.cancelPositions()
+        try:
+            if not self.positions_end_event.wait(timeout):
+                raise TimeoutError("Positions request timed out.")
+        finally:
+            self._safe_cancel(self.cancelPositions)
 
         for account in self.managed_account_ids:
             self._download_portfolio(account, timeout)
 
         return self._snapshot()
+
+    @staticmethod
+    def _safe_cancel(fn: Any, *args: Any) -> None:
+        """Call an ibapi cancel* method; swallow errors so cleanup never masks the real one."""
+        try:
+            fn(*args)
+        except Exception:  # noqa: BLE001 - best-effort cleanup on timeout paths
+            LOGGER.debug("Ignored error during cleanup call %s", getattr(fn, "__name__", fn))
 
     def _download_portfolio(self, account: str, timeout: int) -> None:
         with self._lock:
@@ -350,15 +364,18 @@ class IBKRClient(EWrapper, EClient):
             event.clear()
 
         self.reqAccountUpdates(True, account)
-        if not event.wait(timeout):
-            LOGGER.warning(
-                "Portfolio download for %s did not signal completion within "
-                "%s seconds; results may be partial.",
-                account,
-                timeout,
-            )
-        # Cancel the streaming subscription so subsequent accounts can proceed.
-        self.reqAccountUpdates(False, account)
+        try:
+            if not event.wait(timeout):
+                LOGGER.warning(
+                    "Portfolio download for %s did not signal completion within "
+                    "%s seconds; results may be partial.",
+                    account,
+                    timeout,
+                )
+        finally:
+            # Cancel the streaming subscription so subsequent accounts can proceed
+            # even if we timed out or raised above.
+            self._safe_cancel(self.reqAccountUpdates, False, account)
 
     def _snapshot(self) -> dict[str, list[dict[str, Any]]]:
         with self._lock:

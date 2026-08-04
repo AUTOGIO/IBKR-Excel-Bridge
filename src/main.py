@@ -3,8 +3,8 @@
 
 from __future__ import annotations
 
-import json
 import logging
+import logging.handlers
 import socket
 import sys
 from pathlib import Path
@@ -15,33 +15,45 @@ _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
+from config_loader import load_config as _load_settings  # noqa: E402
 from excel_exporter import ExcelExporter  # noqa: E402
 from ibkr_client import IBKRClient  # noqa: E402
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CONFIG_FILE = PROJECT_ROOT / "config" / "settings.json"
 LOG_FILE = PROJECT_ROOT / "logs" / "ibkr_excel_bridge.log"
+
+# Cap per-file log size so a chatty ibapi run cannot fill the disk over time.
+_LOG_MAX_BYTES = 5_000_000
+_LOG_BACKUP_COUNT = 5
 
 
 def configure_logging(level_name: str = "INFO") -> None:
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
     level = getattr(logging, level_name.upper(), logging.INFO)
+    # ``force=True`` lets a second call (e.g. from tests) replace handlers
+    # instead of silently no-oping when the root logger is already set up.
     logging.basicConfig(
         level=level,
         format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
         handlers=[
-            logging.FileHandler(LOG_FILE, encoding="utf-8"),
+            logging.handlers.RotatingFileHandler(
+                LOG_FILE,
+                maxBytes=_LOG_MAX_BYTES,
+                backupCount=_LOG_BACKUP_COUNT,
+                encoding="utf-8",
+            ),
             logging.StreamHandler(sys.stdout),
         ],
+        force=True,
     )
+    # ibapi INFO logs every REQUEST/ANSWER protobuf frame — several MB per
+    # run. Real errors still surface at WARNING/ERROR.
+    logging.getLogger("ibapi").setLevel(logging.WARNING)
 
 
 def load_config() -> dict:
-    if not CONFIG_FILE.exists():
-        raise FileNotFoundError(f"Configuration not found: {CONFIG_FILE}")
-    with CONFIG_FILE.open("r", encoding="utf-8") as file:
-        return json.load(file)
+    return _load_settings(PROJECT_ROOT)
 
 
 def check_port_open(host: str, port: int, timeout: float = 2.0) -> bool:

@@ -6,6 +6,8 @@ all foreign Lei 14.754 sheets and adds ``IBKR_Reconciliacao``.
 
 from __future__ import annotations
 
+import logging
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
@@ -13,10 +15,18 @@ from typing import Any, Iterable
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
+from openpyxl.utils.exceptions import InvalidFileException
 from openpyxl.worksheet.table import Table, TableStyleInfo
 from openpyxl.worksheet.worksheet import Worksheet
 
 from reconcile import reconcile_quantities
+
+LOGGER = logging.getLogger(__name__)
+
+# openpyxl raises these when a file is truly unreadable as XLSX. Any other
+# exception (PermissionError, OSError, …) should surface to the caller
+# instead of being silently replaced with a fresh workbook.
+_CORRUPT_XLSX_EXCEPTIONS = (zipfile.BadZipFile, InvalidFileException)
 
 
 # Columns rendered with the "money" format (2 decimals, thousands separator).
@@ -39,6 +49,179 @@ _QUANTITY_COLUMNS: frozenset[str] = frozenset(
 
 _MONEY_FORMAT: str = "#,##0.00;[Red]-#,##0.00"
 _QUANTITY_FORMAT: str = "#,##0.####"
+
+# Default Calibri is 11pt; raise all exporter text by +2 for readability.
+_BASE_FONT_SIZE: int = 13
+_TITLE_FONT_SIZE: int = 18
+_BODY_FONT: Font = Font(size=_BASE_FONT_SIZE)
+_HEADER_FONT: Font = Font(size=_BASE_FONT_SIZE, bold=True, color="FFFFFFFF")
+_EMPTY_FONT: Font = Font(size=_BASE_FONT_SIZE, bold=True, italic=True)
+_TITLE_FONT: Font = Font(size=_TITLE_FONT_SIZE, bold=True)
+_GUIDE_LABEL_FONT: Font = Font(size=_BASE_FONT_SIZE, bold=True, color="FF1F4E78")
+_GUIDE_BODY_FONT: Font = Font(size=_BASE_FONT_SIZE, italic=True)
+_GUIDE_FILL: PatternFill = PatternFill(
+    start_color="FFE8F1F8", end_color="FFE8F1F8", fill_type="solid"
+)
+
+# Guide rows written above each data table: Description / How to read / Tip.
+_GUIDE_ROW_COUNT: int = 4  # 3 text rows + 1 blank spacer before the table header
+
+SHEET_GUIDES: dict[str, dict[str, str]] = {
+    "IBKR_Overview": {
+        "description": (
+            "Snapshot control panel for this refresh: when it ran, which "
+            "account(s), exporter mode, and row counts per tab."
+        ),
+        "how_to_read": (
+            "Start here after every ./scripts/run.zsh. Confirm Generated "
+            "timestamp is recent, Accounts matches your TWS paper/live id, "
+            "and row counts look sane (Positions ≥ Portfolio when you hold FX)."
+        ),
+        "tip": (
+            "If row counts look wrong or Generated is stale, close Excel "
+            "(unlock the file) and re-run the collector. This tab has no "
+            "market prices — only metadata."
+        ),
+    },
+    "IBKR_Account_Summary": {
+        "description": (
+            "Base-currency account health from IBKR reqAccountSummary: "
+            "NetLiquidation, cash, buying power, margin, cushion."
+        ),
+        "how_to_read": (
+            "One row per Tag. Use Value (Numeric) for sorting/sums/charts; "
+            "Value is the raw IBKR string (needed for non-numeric tags like "
+            "AccountType). Currency is usually USD or blank."
+        ),
+        "tip": (
+            "Reconcile NetLiquidation and TotalCashValue against the TWS "
+            "Account Window. Cushion ≈ ExcessLiquidity / NetLiquidation. "
+            "Do not sum the Value column as text."
+        ),
+    },
+    "IBKR_Cash_By_Currency": {
+        "description": (
+            "Per-currency ledger from IBKR $LEDGER-* account values: cash, "
+            "FX rate, net liq by currency, and currency-scoped P&L."
+        ),
+        "how_to_read": (
+            "Filter Metric = CashBalance to see balances by Currency. "
+            "ExchangeRate converts that currency into your base. "
+            "NetLiquidationByCurrency × ExchangeRate should roughly rebuild "
+            "base NetLiquidation when summed across currencies."
+        ),
+        "tip": (
+            "This is the source of truth for EUR/GBP/JPY cash — not the "
+            "Positions FX Cash rows. Settled cash can lag Positions qty "
+            "during T+2 FX settlement."
+        ),
+    },
+    "IBKR_Positions": {
+        "description": (
+            "Contract-level holdings from reqPositions, including stocks, "
+            "futures, options, and FX cash-conversion contracts."
+        ),
+        "how_to_read": (
+            "Use Kind to separate Stock / Future / FX Cash. Quantity is "
+            "signed (negative = short). Average Cost here is the native "
+            "(price-only) average from IBKR positions."
+        ),
+        "tip": (
+            "Expect more rows than IBKR_Portfolio when Kind = FX Cash exists. "
+            "Do not row-match the two sheets; match Stock/Future by Contract ID."
+        ),
+    },
+    "IBKR_Portfolio": {
+        "description": (
+            "Marked securities from updatePortfolio: market price, market "
+            "value, and unrealized/realized P&L. Excludes FX cash contracts."
+        ),
+        "how_to_read": (
+            "Quantity × Market Price ≈ Market Value. "
+            "(Market Price − Average Cost) × Quantity ≈ Unrealized P&L. "
+            "Average Cost here is commission-inclusive (can differ slightly "
+            "from Positions)."
+        ),
+        "tip": (
+            "Prices tick between TWS and this snapshot — small MV/P&L drift "
+            "is normal. Futures MV can dwarf stock MV; GrossPositionValue "
+            "in Account Summary is usually stocks/options, not futures notional."
+        ),
+    },
+    "IBKR_API_Messages": {
+        "description": (
+            "IBKR API status stream for this session: farm connections, "
+            "warnings, and real client errors."
+        ),
+        "how_to_read": (
+            "Kind = info is normal (market-data farm OK). Kind = warning "
+            "needs a glance. Kind = error (codes 100–499) means a request "
+            "failed. Prefer Error Time (Local) over Error Time (ms)."
+        ),
+        "tip": (
+            "A healthy refresh is all info and zero errors. Repeated code "
+            "200/502 usually means TWS API socket/port or contract issues."
+        ),
+    },
+    "IBKR_Reconciliacao": {
+        "description": (
+            "Compares live IBKR position quantities to fiscal quantities "
+            "from the tax workbook (MyProfit_2026 / Posicoes_Atuais)."
+        ),
+        "how_to_read": (
+            "Qty IBKR vs Qty Fiscal; Delta = IBKR − Fiscal. Status flags "
+            "matches and breaks within the configured tolerance."
+        ),
+        "tip": (
+            "Only available in tax_workbook mode. Investigate BREAK rows "
+            "before filing — they often mean missing corporate actions or "
+            "unpromoted events."
+        ),
+    },
+    "IBKR_Eventos_Staging": {
+        "description": (
+            "Staging table of ledger events (trades, dividends, etc.) "
+            "pending or already promoted into the tax flow."
+        ),
+        "how_to_read": (
+            "Sort by date/symbol. Promoted = True means the event already "
+            "fed derived positions. Check source_file and observacoes for "
+            "provenance."
+        ),
+        "tip": (
+            "Do not edit IBKR-owned columns by hand in a way that fights "
+            "the next ingest — fix upstream events.jsonl / statements."
+        ),
+    },
+    "IBKR_Posicao_From_Events": {
+        "description": (
+            "Positions derived by replaying promoted events (quantity and "
+            "average cost in USD/BRL)."
+        ),
+        "how_to_read": (
+            "Compare Symbol/Quantity here to IBKR_Positions and to fiscal "
+            "tabs. Status explains whether the derived lot is open/closed."
+        ),
+        "tip": (
+            "If this diverges from live IBKR Positions, events are incomplete "
+            "or promotion rules need review — use IBKR_Reconciliacao next."
+        ),
+    },
+    "Workbook Report": {
+        "description": (
+            "User-authored audit / structure report. Preserved across "
+            "collector refreshes (not overwritten by IBKR_* exporters)."
+        ),
+        "how_to_read": (
+            "Treat findings as guidance for the IBKR_* tabs. Re-check claims "
+            "against the latest Generated timestamp on IBKR_Overview."
+        ),
+        "tip": (
+            "After big schema changes, refresh this report manually so it "
+            "does not describe a stale layout."
+        ),
+    },
+}
 
 OWNED_SHEETS_STANDALONE: tuple[str, ...] = (
     "IBKR_Overview",
@@ -159,7 +342,12 @@ class ExcelExporter:
             self._assert_not_locked()
             try:
                 workbook = load_workbook(self.output_path)
-            except Exception:  # noqa: BLE001 - corrupt file: fall back to fresh
+            except _CORRUPT_XLSX_EXCEPTIONS as exc:
+                LOGGER.warning(
+                    "Standalone workbook %s is unreadable (%s); rebuilding from scratch.",
+                    self.output_path,
+                    exc,
+                )
                 workbook = Workbook()
                 default = workbook.active
                 if default is not None:
@@ -205,17 +393,25 @@ class ExcelExporter:
     def _autosize(worksheet: Worksheet, cap: int = 40) -> None:
         for column_cells in worksheet.columns:
             first = column_cells[0]
-            if first.column_letter is None:
-                continue
-            column_letter = get_column_letter(first.column)
+            column_letter = getattr(first, "column_letter", None)
+            if column_letter is None:
+                # Merged cells (e.g. guide body spanning B:F) have no letter.
+                col_idx = getattr(first, "column", None)
+                if col_idx is None:
+                    continue
+                column_letter = get_column_letter(col_idx)
             maximum_length = 0
             for cell in column_cells:
-                value = "" if cell.value is None else str(cell.value)
+                if getattr(cell, "value", None) is None:
+                    continue
+                value = str(cell.value)
+                # Don't let long wrapped guide text inflate column width.
                 if len(value) > maximum_length:
-                    maximum_length = len(value)
-            worksheet.column_dimensions[column_letter].width = min(
-                maximum_length + 3, cap
-            )
+                    maximum_length = min(len(value), cap)
+            if maximum_length:
+                worksheet.column_dimensions[column_letter].width = min(
+                    maximum_length + 3, cap
+                )
 
     @staticmethod
     def _apply_number_format(cell: Any, column: str) -> None:
@@ -243,13 +439,16 @@ class ExcelExporter:
         table_name: str,
         row_count: int,
         column_count: int,
+        *,
+        start_row: int = 1,
     ) -> None:
-        if row_count < 2 or column_count < 1:
+        # row_count is the absolute last row of the table (including header).
+        if row_count < start_row + 1 or column_count < 1:
             return
         end_column = get_column_letter(column_count)
         table = Table(
             displayName=table_name,
-            ref=f"A1:{end_column}{row_count}",
+            ref=f"A{start_row}:{end_column}{row_count}",
         )
         table.tableStyleInfo = TableStyleInfo(
             name="TableStyleMedium2",
@@ -260,6 +459,39 @@ class ExcelExporter:
         )
         worksheet.add_table(table)
 
+    def _write_sheet_guide(
+        self,
+        worksheet: Worksheet,
+        sheet_name: str,
+    ) -> int:
+        """Write Description / How to read / Tip block. Returns first data row."""
+        guide = SHEET_GUIDES.get(sheet_name)
+        if not guide:
+            return 1
+
+        lines = (
+            ("Description", guide["description"]),
+            ("How to read", guide["how_to_read"]),
+            ("Tip", guide["tip"]),
+        )
+        for index, (label, text) in enumerate(lines, start=1):
+            label_cell = worksheet.cell(row=index, column=1, value=label)
+            body_cell = worksheet.cell(row=index, column=2, value=text)
+            label_cell.font = _GUIDE_LABEL_FONT
+            body_cell.font = _GUIDE_BODY_FONT
+            body_cell.alignment = Alignment(wrap_text=True, vertical="top")
+            label_cell.fill = _GUIDE_FILL
+            body_cell.fill = _GUIDE_FILL
+            worksheet.merge_cells(
+                start_row=index, start_column=2, end_row=index, end_column=6
+            )
+            worksheet.row_dimensions[index].height = 40
+
+        worksheet.row_dimensions[_GUIDE_ROW_COUNT].height = 8
+        worksheet.column_dimensions["A"].width = 14
+        worksheet.column_dimensions["B"].width = 28
+        return _GUIDE_ROW_COUNT + 1
+
     def _write_records(
         self,
         workbook: Workbook,
@@ -269,10 +501,15 @@ class ExcelExporter:
         preferred_order: Iterable[str] | None = None,
     ) -> None:
         worksheet = workbook.create_sheet(sheet_name)
+        data_start = self._write_sheet_guide(worksheet, sheet_name)
 
         if not records:
-            worksheet["A1"] = f"No {sheet_name.lower()} data returned."
-            worksheet["A1"].font = Font(bold=True, italic=True)
+            empty = worksheet.cell(
+                row=data_start,
+                column=1,
+                value=f"No {sheet_name.lower()} data returned.",
+            )
+            empty.font = _EMPTY_FONT
             worksheet.column_dimensions["A"].width = 40
             return
 
@@ -290,28 +527,43 @@ class ExcelExporter:
         header_fill = PatternFill(
             start_color="FF1F4E78", end_color="FF1F4E78", fill_type="solid"
         )
-        header_font = Font(bold=True, color="FFFFFFFF")
+        header_row = data_start
 
         for index, column in enumerate(columns, start=1):
-            cell = worksheet.cell(row=1, column=index, value=self._humanize(column))
-            cell.font = header_font
+            cell = worksheet.cell(
+                row=header_row,
+                column=index,
+                value=self._humanize(column),
+            )
+            cell.font = _HEADER_FONT
             cell.fill = header_fill
             cell.alignment = Alignment(horizontal="center", vertical="center")
 
-        for row_index, record in enumerate(records, start=2):
+        for offset, record in enumerate(records):
+            row_index = header_row + 1 + offset
             for column_index, column in enumerate(columns, start=1):
                 value = self._coerce_number(column, record.get(column))
                 cell = worksheet.cell(row=row_index, column=column_index, value=value)
+                cell.font = _BODY_FONT
                 self._apply_number_format(cell, column)
 
-        worksheet.freeze_panes = "A2"
+        last_row = header_row + len(records)
+        worksheet.freeze_panes = f"A{header_row + 1}"
         self._make_table(
             worksheet=worksheet,
             table_name=table_name,
-            row_count=worksheet.max_row,
-            column_count=worksheet.max_column,
+            row_count=last_row,
+            column_count=len(columns),
+            start_row=header_row,
         )
         self._autosize(worksheet)
+        # Keep guide label/body readable after autosize.
+        worksheet.column_dimensions["A"].width = max(
+            worksheet.column_dimensions["A"].width or 0, 14
+        )
+        worksheet.column_dimensions["B"].width = max(
+            worksheet.column_dimensions["B"].width or 0, 28
+        )
 
     def _write_overview(
         self,
@@ -320,6 +572,8 @@ class ExcelExporter:
     ) -> None:
         overview = workbook["IBKR_Overview"]
         overview.delete_rows(1, overview.max_row)
+
+        data_start = self._write_sheet_guide(overview, "IBKR_Overview")
 
         generated_at = datetime.now().astimezone()
         errors = data.get("errors", [])
@@ -355,15 +609,24 @@ class ExcelExporter:
             ),
         ]
 
-        for row_number, row in enumerate(overview_rows, start=1):
-            overview.cell(row=row_number, column=1, value=row[0])
-            overview.cell(row=row_number, column=2, value=row[1])
+        for offset, row in enumerate(overview_rows):
+            row_number = data_start + offset
+            left = overview.cell(row=row_number, column=1, value=row[0])
+            right = overview.cell(row=row_number, column=2, value=row[1])
+            left.font = _BODY_FONT
+            right.font = _BODY_FONT
 
-        overview.merge_cells("A1:B1")
-        overview["A1"].font = Font(size=16, bold=True)
-        overview["A1"].alignment = Alignment(horizontal="left", vertical="center")
+        title_row = data_start
+        overview.merge_cells(
+            start_row=title_row, start_column=1, end_row=title_row, end_column=2
+        )
+        overview.cell(row=title_row, column=1).font = _TITLE_FONT
+        overview.cell(row=title_row, column=1).alignment = Alignment(
+            horizontal="left", vertical="center"
+        )
         overview.column_dimensions["A"].width = 32
         overview.column_dimensions["B"].width = 42
+        overview.freeze_panes = f"A{data_start}"
 
     def _write_reconciliation(
         self,
@@ -488,8 +751,59 @@ class ExcelExporter:
             self._write_reconciliation(workbook, data)
             self._write_event_sheets(workbook)
 
+        self._ensure_foreign_sheet_guides(workbook)
+
         workbook.save(self.output_path)
         return self.output_path
+
+    def _ensure_foreign_sheet_guides(self, workbook: Workbook) -> None:
+        """Add Description / How to read / Tip to preserved foreign tabs."""
+        for sheet_name, guide in SHEET_GUIDES.items():
+            if sheet_name in self.owned_sheets:
+                continue
+            if sheet_name not in workbook.sheetnames:
+                continue
+            ws = workbook[sheet_name]
+            if ws["A1"].value == "Description":
+                # Refresh text in place (unmerge first so writes stick).
+                for r in range(1, 4):
+                    for merged in list(ws.merged_cells.ranges):
+                        if (
+                            merged.min_row <= r <= merged.max_row
+                            and merged.min_col <= 2 <= merged.max_col
+                        ):
+                            try:
+                                ws.unmerge_cells(str(merged))
+                            except ValueError:
+                                pass
+                ws["B1"] = guide["description"]
+                ws["B2"] = guide["how_to_read"]
+                ws["B3"] = guide["tip"]
+                for r in range(1, 4):
+                    ws.cell(row=r, column=1).font = _GUIDE_LABEL_FONT
+                    body = ws.cell(row=r, column=2)
+                    body.font = _GUIDE_BODY_FONT
+                    body.alignment = Alignment(wrap_text=True, vertical="top")
+                    ws.cell(row=r, column=1).fill = _GUIDE_FILL
+                    body.fill = _GUIDE_FILL
+                continue
+            # Insert guide rows at the top without wiping existing content.
+            ws.insert_rows(1, _GUIDE_ROW_COUNT)
+            lines = (
+                ("Description", guide["description"]),
+                ("How to read", guide["how_to_read"]),
+                ("Tip", guide["tip"]),
+            )
+            for index, (label, text) in enumerate(lines, start=1):
+                label_cell = ws.cell(row=index, column=1, value=label)
+                body_cell = ws.cell(row=index, column=2, value=text)
+                label_cell.font = _GUIDE_LABEL_FONT
+                body_cell.font = _GUIDE_BODY_FONT
+                body_cell.alignment = Alignment(wrap_text=True, vertical="top")
+                label_cell.fill = _GUIDE_FILL
+                body_cell.fill = _GUIDE_FILL
+                ws.row_dimensions[index].height = 40
+            ws.row_dimensions[_GUIDE_ROW_COUNT].height = 8
 
     def _write_event_sheets(self, workbook: Workbook) -> None:
         from events_store import load_events
